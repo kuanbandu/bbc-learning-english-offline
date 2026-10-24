@@ -202,6 +202,24 @@ node -e "const d=require('./content/index.json');const e=d.courses.flatMap(c=>c.
 
 ## 五、打包成安卓 APK
 
+### 方式 A：直接从 Release 下载（不用装 Android Studio）
+
+仓库里的 GitHub Actions 会自动编译 APK，挂在每个 Release 上：
+
+```bash
+git tag v1.0.1 && git push --follow-tags    # 打标签即触发构建
+```
+
+构建完去 [Releases](../../releases) 页面下载 `bbc-learning-english-vX.Y.Z.apk`，传到手机安装。
+
+> **重要：这样得到的 APK 是"空壳"，里面没有课程。**
+> 原因：`content/`（音频和文稿）被 `.gitignore` 排除了——版权归 BBC，不能放进公开仓库。
+> 想要**带内容的 APK**，请用方式 B 在你自己电脑上编译（内容在你本机，不上传）。
+
+也可以只装个空壳先看看界面：手机上打开会提示"还没有学习包"。
+
+### 方式 B：本机编译（APK 含你抓到的内容）
+
 需要先装一次 [Android Studio](https://developer.android.com/studio)（用于最终编译签名）。
 
 ```bash
