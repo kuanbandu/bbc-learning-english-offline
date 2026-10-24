@@ -1,8 +1,12 @@
 # BBC 轻松英语 · 离线学习包
 
-把 [BBC Learning English – Easy Courses](https://www.bbc.co.uk/learningenglish/chinese/easy_course) 的**音频 + 文稿**一次性抓到本机，做成一个**可以在手机上离线使用的 App**（PWA，也能打包成安卓 APK）。
+把 [BBC Learning English](https://www.bbc.co.uk/learningenglish) 的**音频 + 文稿**一次性抓到本机，做成一个**可以在手机上离线使用的 App**（PWA，也能打包成安卓 APK）。
+
+默认覆盖 **41 个节目**（入门 / 中级 / 高级课程 + 首页精选的 6 Minute English、The English We Speak 等）。
 
 抓完之后：手机上不需要联网、不需要访问 BBC、不消耗流量，坐地铁也能听。
+
+> 仓库里只有**代码**，不含抓取产物。`content/`（音频与文稿）被 `.gitignore` 排除——版权归 BBC，请不要上传。克隆后自己跑 `npm run build` 即可生成。
 
 ---
 
@@ -58,7 +62,7 @@ npm run crawl       # 逐集抓取音频直链与文稿
 npm run download    # 把音频下载到本机
 ```
 
-默认从两个入口采集（可在 `config.json` 的 `startUrls` 里增删）：
+默认从四个入口采集（可在 `config.json` 的 `startUrls` 里增删）：
 
 | 入口 | 拿到的节目 |
 | --- | --- |
@@ -273,12 +277,14 @@ BBC 会按出口 IP 重定向语言目录。本工具已用重定向后的最终
 **Q：抓太慢 / 怕被 BBC 限流**
 调 `config.json` 的 `concurrency`（默认 3）和 `minDelayMs`（默认 700）。默认设置是克制的，别调太激进。
 
-**Q：想抓 Medium / Hard 难度的课程**
-改 `config.json` 的 `startUrls`，例如：
+**Q：想换抓取范围**
+改 `config.json` 的 `startUrls` 即可，入门/中级/高级和首页精选默认都已包含。只想抓某一个难度就只留那一行：
 
 ```json
-"startUrls": ["https://www.bbc.co.uk/learningenglish/chinese/medium_course"]
+"startUrls": ["https://www.bbc.co.uk/learningenglish/medium_course"]
 ```
+
+改完跑 `npm run courses` 重新生成目录（已抓过的单集和音频不会被清掉）。
 
 ---
 
