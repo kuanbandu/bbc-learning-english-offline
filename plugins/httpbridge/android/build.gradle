@@ -1,0 +1,25 @@
+// 作为被 cap sync 合入到主工程（由 @capacitor/android 生成）的 library 模块，
+// 不单独声明 AGP 的 buildscript classpath——沿用主工程的 AGP。
+apply plugin: 'com.android.library'
+
+android {
+    namespace "com.kuanbandu.httpbridge"
+    compileSdkVersion 35
+    defaultConfig {
+        minSdkVersion 22
+        targetSdkVersion 35
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+repositories {
+    google()
+    mavenCentral()
+}
+
+dependencies {
+    implementation project(':capacitor-android')
+}
