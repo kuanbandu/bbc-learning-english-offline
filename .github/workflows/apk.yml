@@ -21,10 +21,11 @@ jobs:
           node-version: '20'
 
       - name: 准备 JDK
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: '17'
+          # 新版 Capacitor 要求 Java 21（用 17 会报 invalid source release: 21）
+          java-version: '21'
 
       - name: 安装 Capacitor
         run: npm i @capacitor/cli @capacitor/core @capacitor/android
