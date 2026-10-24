@@ -1,6 +1,8 @@
 # 依赖
 node_modules/
 android/
+# 例外：本仓库自带的原生插件源码需要纳入版本控制
+!plugins/httpbridge/android/
 
 # 产物与抓取结果（运行 npm run build 会自动重新生成）
 dist/
