@@ -14,7 +14,7 @@ const Cap = window.Capacitor;
 const NATIVE = !!(Cap && Cap.isNativePlatform && Cap.isNativePlatform());
 // 不依赖插件的 JS 包，用 registerPlugin 直接走原生桥（标准插件都支持）
 const Http = NATIVE
-  ? (Cap.Plugins?.CapacitorHttp || Cap.registerPlugin('CapacitorHttp'))
+  ? (Cap.Plugins?.HttpBridge || Cap.registerPlugin('HttpBridge'))
   : null;
 const FS = NATIVE
   ? (Cap.Plugins?.Filesystem || Cap.registerPlugin('Filesystem'))

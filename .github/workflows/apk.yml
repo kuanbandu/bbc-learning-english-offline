@@ -32,7 +32,14 @@ jobs:
           java-version: '21'
 
       - name: 安装 Capacitor 与原生插件
-        run: npm i @capacitor/cli @capacitor/core @capacitor/android @capacitor/http @capacitor/filesystem
+        run: npm i @capacitor/cli @capacitor/core @capacitor/android @capacitor/filesystem
+
+      # file: 本地插件在部分环境会以符号链接形式进入 node_modules，cap sync 可能漏掉。
+      # 这里用真实目录覆盖，确保原生代码被打包进 APK。
+      - name: 落实原生插件目录
+        run: |
+          rm -rf node_modules/httpbridge
+          cp -r plugins/httpbridge node_modules/httpbridge
 
       - name: 生成离线包
         run: node tools/build-dist.mjs
