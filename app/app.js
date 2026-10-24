@@ -33,7 +33,7 @@ const epAudioUrl = (e) => (e.audioFile ? `content/${e.audioFile}` : e.audioUrl);
 const clean = (w) => w.replace(/^[^\p{L}\p{N}'’-]+|[^\p{L}\p{N}'’-]+$/gu, '');
 
 /* ---------------- 导航 ---------------- */
-const VIEWS = ['home', 'series', 'player', 'vocab', 'settings'];
+const VIEWS = ['home', 'series', 'player', 'vocab', 'settings', 'download'];
 let stack = [];
 
 function show(view, { push = true, tab = false } = {}) {
@@ -43,6 +43,7 @@ function show(view, { push = true, tab = false } = {}) {
   $('#btn-back').hidden = !(stack.length > 1 && view !== 'home' && view !== 'vocab' && view !== 'settings');
   $('#topbar').style.display = view === 'home' ? '' : '';
   $$('.tab').forEach((t) => t.classList.toggle('active', t.dataset.view === view));
+  if (view === 'download') renderDownload();
   window.scrollTo(0, 0);
 }
 
@@ -66,7 +67,41 @@ async function boot() {
       `<div class="banner">还没有学习包。请在电脑上运行 <b>npm run build</b> 抓取课程，再执行 <b>npm run dist</b> 生成离线包。（${err.message}）</div>`;
     return;
   }
+  await whenNet();
+  mergeLibrary();
   renderHome();
+}
+
+// 等 net.js（模块）注入 window.BBCNet；最多等 3 秒，避免模块加载失败时卡死启动
+function whenNet() {
+  if (window.BBCNet) return Promise.resolve();
+  return Promise.race([
+    new Promise((r) => window.addEventListener('bbcnet:ready', r, { once: true })),
+    new Promise((r) => setTimeout(r, 3000)),
+  ]);
+}
+
+// 把“已下载”库里的单集并入 DATA，让它们在「课程」里也能看到、播放
+let libMerged = false;
+function mergeLibrary() {
+  if (libMerged) return;
+  libMerged = true;
+  if (!window.BBCNet || !DATA || !Array.isArray(DATA.courses)) return;
+  const lib = window.BBCNet.getLibrary();
+  for (const ep of Object.values(lib.episodes || {})) if (ep.localPath) addLocalEpisode(ep);
+}
+function ensureLocalCourse() {
+  let c = DATA.courses.find((x) => x.id === 'local');
+  if (!c) { c = { id: 'local', title: '我的下载', level: '已下载', series: [] }; DATA.courses.push(c); }
+  return c;
+}
+function addLocalEpisode(ep) {
+  const c = ensureLocalCourse();
+  let s = c.series.find((x) => x.id === ep.seriesId);
+  if (!s) { s = { id: ep.seriesId, title: ep.seriesTitle || ep.seriesId, level: '已下载', episodes: [] }; c.series.push(s); }
+  if (!s.episodes.some((x) => x.id === ep.id)) {
+    s.episodes.push({ id: ep.id, title: ep.title, date: ep.date, url: ep.url, audioUrl: ep.audioUrl, transcript: ep.transcript, localPath: ep.localPath });
+  }
 }
 
 function allSeries() {
@@ -92,8 +127,9 @@ function renderHome() {
     $('#home-levels').innerHTML =
       `<div class="banner">这个 App 里还没有课程内容。</div>` +
       `<div class="summary">
-         <div>音频和文稿的版权归 BBC，不会跟着代码一起发布，需要在你自己的电脑上抓取后再打包进来。</div>
-         <div class="muted small" style="margin-top:.5rem">最快的办法：电脑上跑 <b>npm start</b>，手机连同一个 WiFi 打开提示的地址。</div>
+         <div>① <b>直接在 App 里下载</b>：底部切到「下载」→ 选栏目 → 点单集「下载」，音频和文稿会存进手机，断网也能听（仅安卓 App 内可用）。</div>
+         <div style="margin-top:.5rem">② 电脑上跑 <b>npm start</b>，手机连同一个 WiFi 打开提示的地址，内容自动带过来。</div>
+         <div class="muted small" style="margin-top:.5rem">音频和文稿版权归 BBC，不会随安装包一起分发，需自行获取后用于个人离线学习。</div>
        </div>`;
     return;
   }
@@ -188,14 +224,22 @@ async function openEpisode(i) {
 }
 
 async function loadAudio(e) {
-  const url = epAudioUrl(e);
-  if (!url) throw new Error('本集没有音频地址');
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const blob = await res.blob();
-  if (audioObjUrl) URL.revokeObjectURL(audioObjUrl);
-  audioObjUrl = URL.createObjectURL(blob);
-  player.src = audioObjUrl;
+  let src = null;
+  // 已下载到手机本地的音频：用原生文件地址直接播放（离线可用）
+  if (e.localPath && window.Capacitor?.isNativePlatform?.() && window.BBCNet) {
+    try { src = await window.BBCNet.localSrc(e.localPath); } catch (err) { console.warn('本地音频解析失败', err); }
+  }
+  if (!src) {
+    const url = epAudioUrl(e);
+    if (!url) throw new Error('本集没有音频地址');
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const blob = await res.blob();
+    if (audioObjUrl) URL.revokeObjectURL(audioObjUrl);
+    audioObjUrl = URL.createObjectURL(blob);
+    src = audioObjUrl;
+  }
+  player.src = src;
   player.load();
 
   const p = LS.get(KEY_PROGRESS, {})[epKey(curSeries, e)];
@@ -448,6 +492,111 @@ async function updateCacheStat() {
     stat = `已占用 ${(usage / 1048576).toFixed(1)} MB / 可用 ${(quota / 1048576).toFixed(0)} MB`;
   }
   $('#cache-stat').textContent = stat;
+}
+
+/* ---------------- 在线下载 ---------------- */
+let dlState = { level: null, series: null };
+
+function renderDownload() {
+  const body = $('#dl-body');
+  const levels = $('#dl-levels');
+  if (!window.BBCNet || !window.BBCNet.NATIVE) {
+    levels.innerHTML = '';
+    body.innerHTML =
+      '<div class="banner">下载功能需要在安卓 App（APK）里使用。你现在是浏览器打开，可浏览目录但不能下载音频。</div>';
+    return;
+  }
+  const cat = window.BBCNet.getCatalog();
+  levels.innerHTML =
+    window.BBCNet.ENTRY_URLS.map(
+      (e) => `<button class="chip ${dlState.level === e.id ? 'active' : ''}" data-level="${e.id}">${e.label}</button>`
+    ).join('') + '<button class="chip" id="dl-refresh">刷新目录</button>';
+  $$('#dl-levels [data-level]').forEach((b) => (b.onclick = () => { dlState.level = b.dataset.level; dlState.series = null; renderDownload(); }));
+  $('#dl-refresh').onclick = async () => { dlState.level = null; dlState.series = null; body.innerHTML = '<p class="muted">正在刷新目录…</p>'; levels.innerHTML = ''; await window.BBCNet.fetchCatalog(); renderDownload(); };
+
+  if (!dlState.level) { body.innerHTML = '<p class="muted">选择一个栏目开始。</p>'; return; }
+  if (!cat) { body.innerHTML = '<p class="muted">正在加载目录…</p>'; window.BBCNet.fetchCatalog().then(renderDownload); return; }
+  const course = cat.courses.find((c) => c.id === dlState.level);
+  if (!course) { body.innerHTML = '<p class="muted">该栏目暂无内容。</p>'; return; }
+  if (!course.series.length) { body.innerHTML = `<p class="muted">没有解析到系列（${course.error || '未知错误'}）。</p>`; return; }
+
+  body.innerHTML =
+    '<div class="grid">' +
+    course.series
+      .map((s) => `<div class="card" data-series="${encodeURIComponent(s.id)}"><div class="t">${escapeHtml(s.title)}</div><div class="m">${escapeHtml(s.url)}</div></div>`)
+      .join('') +
+    '</div>';
+  $$('#dl-body .card').forEach((c) => (c.onclick = () => openDlSeries(decodeURIComponent(c.dataset.series))));
+}
+
+async function openDlSeries(seriesId) {
+  const body = $('#dl-body');
+  body.innerHTML = '<p class="muted">正在获取单集列表…</p>';
+  const cat = window.BBCNet.getCatalog();
+  const course = cat.courses.find((c) => c.id === dlState.level);
+  const series = course.series.find((s) => s.id === seriesId);
+  let data;
+  try { data = await window.BBCNet.fetchSeries(series); }
+  catch (e) { body.innerHTML = `<div class="banner">获取失败：${escapeHtml(e.message || e)}</div>`; return; }
+  dlState.series = data;
+  renderDlEpisodes();
+}
+
+function renderDlEpisodes() {
+  const s = dlState.series;
+  const body = $('#dl-body');
+  body.innerHTML =
+    `<div class="series-head"><h1>${escapeHtml(s.title)}</h1><p class="muted">${s.episodes.length} 集</p></div>` +
+    '<div class="tool-row"><button class="chip" id="dl-all">下载全部</button><button class="chip" id="dl-back">返回栏目</button></div>' +
+    '<div class="list">' +
+    s.episodes
+      .map((e, i) => {
+        const st = window.BBCNet.getStored(s.id, e.id);
+        return `<div class="row" data-i="${i}"><div class="ep"><div class="body"><div class="t">${escapeHtml(e.title || e.id)}</div><div class="m">${escapeHtml(e.date || '')}</div></div></div><button class="chip dl-btn" data-i="${i}">${st ? '已下载' : '下载'}</button></div>`;
+      })
+      .join('') +
+    '</div><div id="dl-progress" class="muted small"></div>';
+
+  $('#dl-all').onclick = () => downloadAll(s);
+  $('#dl-back').onclick = () => renderDownload();
+  $$('#dl-body .row').forEach((r) => {
+    const i = Number(r.dataset.i);
+    const btn = r.querySelector('.dl-btn');
+    btn.onclick = (ev) => { ev.stopPropagation(); downloadOne(s, i); };
+    r.querySelector('.ep').onclick = () => { const st = window.BBCNet.getStored(s.id, s.episodes[i].id); if (st) openLocalEpisode(st); };
+  });
+}
+
+async function downloadOne(s, i) {
+  const e = s.episodes[i];
+  const btn = $(`#dl-body .row[data-i="${i}"] .dl-btn`);
+  if (btn) { btn.disabled = true; btn.textContent = '下载中…'; }
+  const prog = $('#dl-progress');
+  try {
+    const r = await window.BBCNet.downloadAudio(e);
+    addLocalEpisode(r.ep);
+    if (btn) { btn.textContent = '已下载'; btn.classList.add('on'); }
+    if (prog) prog.textContent = `已下载：${r.ep.title}`;
+  } catch (err) {
+    if (btn) btn.textContent = '失败';
+    if (prog) prog.textContent = `下载失败：${err.message || err}`;
+  }
+}
+
+async function downloadAll(s) {
+  for (let i = 0; i < s.episodes.length; i++) {
+    if (window.BBCNet.getStored(s.id, s.episodes[i].id)) continue;
+    await downloadOne(s, i);
+  }
+}
+
+function openLocalEpisode(st) {
+  const c = DATA?.courses?.find((x) => x.id === 'local');
+  if (!c) return;
+  curSeries = c.series.find((x) => x.id === st.seriesId);
+  if (!curSeries) return;
+  const i = curSeries.episodes.findIndex((x) => x.id === st.id);
+  if (i >= 0) openEpisode(i);
 }
 
 /* ---------------- 启动 ---------------- */

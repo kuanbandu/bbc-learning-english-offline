@@ -31,8 +31,8 @@ jobs:
           # 新版 Capacitor 要求 Java 21（用 17 会报 invalid source release: 21）
           java-version: '21'
 
-      - name: 安装 Capacitor
-        run: npm i @capacitor/cli @capacitor/core @capacitor/android
+      - name: 安装 Capacitor 与原生插件
+        run: npm i @capacitor/cli @capacitor/core @capacitor/android @capacitor/http @capacitor/filesystem
 
       - name: 生成离线包
         run: node tools/build-dist.mjs
@@ -54,8 +54,8 @@ jobs:
           }
           EOF
 
-      - name: 同步网页资源
-        run: npx cap copy android
+      - name: 同步网页资源并链接原生插件
+        run: npx cap sync android
 
       - name: 构建 Debug APK
         run: |

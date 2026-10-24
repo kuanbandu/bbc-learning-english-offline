@@ -79,6 +79,15 @@
   </div>
 </main>
 
+<main id="view-download" class="view" hidden>
+  <div class="summary">
+    <div>在线获取 BBC 课程，下载到手机后离线学习。</div>
+    <div class="muted small">下载功能仅在安卓 App（APK）内可用；用浏览器打开时只能浏览目录、不能下载音频。</div>
+  </div>
+  <div id="dl-levels" class="level-tabs"></div>
+  <div id="dl-body"></div>
+</main>
+
 <main id="view-settings" class="view" hidden>
   <h1>设置</h1>
   <div class="list">
@@ -106,10 +115,12 @@
 
 <nav id="tabbar">
   <button class="tab active" data-view="home">课程</button>
+  <button class="tab" data-view="download">下载</button>
   <button class="tab" data-view="vocab">生词本</button>
   <button class="tab" data-view="settings">设置</button>
 </nav>
 
+<script type="module" src="net.js"></script>
 <script src="app.js"></script>
 <script>
 if ('serviceWorker' in navigator) {

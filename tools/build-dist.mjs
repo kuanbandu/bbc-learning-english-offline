@@ -23,6 +23,14 @@ function copyDir(src, dest) {
 copyDir(APP, DIST);
 writeIcons(DIST);
 
+// 把解析模块（纯 JS，无 Node 依赖）复制到 dist/lib，供 app/net.js 复用
+const LIB = path.join(ROOT, 'src', 'lib');
+fs.mkdirSync(path.join(DIST, 'lib'), { recursive: true });
+for (const f of ['html.mjs', 'audio.mjs', 'parse.mjs']) {
+  const src = path.join(LIB, f);
+  if (fs.existsSync(src)) fs.copyFileSync(src, path.join(DIST, 'lib', f));
+}
+
 if (fs.existsSync(path.join(CONTENT, 'index.json'))) {
   copyDir(CONTENT, path.join(DIST, 'content'));
   const idx = JSON.parse(fs.readFileSync(path.join(CONTENT, 'index.json'), 'utf8'));
