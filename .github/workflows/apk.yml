@@ -8,6 +8,10 @@ on:
   # 也可在 GitHub 网页上手动点 "Run workflow"
   workflow_dispatch:
 
+# 默认 GITHUB_TOKEN 是只读的，创建 Release 会 403，必须显式要写权限
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
