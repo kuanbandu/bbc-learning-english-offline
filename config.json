@@ -1,0 +1,33 @@
+{
+  "_说明": "所有抓取行为都在这里配置，不需要改代码",
+
+  "lang": "chinese",
+  "startUrls": [
+    "https://www.bbc.co.uk/learningenglish",
+    "https://www.bbc.co.uk/learningenglish/chinese/easy_course",
+    "https://www.bbc.co.uk/learningenglish/hard_course",
+    "https://www.bbc.co.uk/learningenglish/medium_course"
+  ],
+
+  "_lang说明": "chinese=中文导航版（推荐）；english=英文原版。startUrls 会按顺序尝试，第一个能抓通的优先",
+
+  "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+  "timeoutMs": 30000,
+  "retries": 3,
+  "concurrency": 3,
+  "minDelayMs": 700,
+
+  "_politeness说明": "concurrency=并发数，minDelayMs=每次请求最小间隔(毫秒)。请保持克制，别把 BBC 服务器压垮",
+
+  "cacheHtml": true,
+  "maxEpisodesPerSeries": 0,
+  "_maxEpisodes说明": "0=不限。想先试水可设成 5",
+
+  "downloadAudio": true,
+  "audioMaxRetries": 3,
+  "audioTimeoutMs": 600000,
+  "_audio说明": "单集音频约 10-15MB，走代理可能只有 100KB/s，超时给到 10 分钟。失败的会记进 content/state.json，重跑自动续传",
+
+  "proxy": "http://127.0.0.1:7897",
+  "_proxy说明": "留空则直连。Node 24 原生支持，无需额外依赖"
+}

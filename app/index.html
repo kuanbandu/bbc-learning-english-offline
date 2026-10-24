@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1">
+<meta name="theme-color" content="#b80000">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<title>BBC 轻松英语 · 离线学习</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+</head>
+<body>
+
+<header id="topbar">
+  <button id="btn-back" class="icon-btn" hidden aria-label="返回">‹</button>
+  <div class="tb-title">BBC 轻松英语</div>
+  <button id="btn-menu" class="icon-btn" aria-label="菜单">☰</button>
+</header>
+
+<main id="view-home" class="view">
+  <div id="home-summary" class="summary"></div>
+  <div id="home-levels"></div>
+</main>
+
+<main id="view-series" class="view" hidden>
+  <div class="series-head">
+    <h1 id="series-title"></h1>
+    <p id="series-meta" class="muted"></p>
+  </div>
+  <div id="episode-list" class="list"></div>
+</main>
+
+<main id="view-player" class="view" hidden>
+  <div class="player-head">
+    <h1 id="pl-title"></h1>
+    <p id="pl-meta" class="muted"></p>
+  </div>
+
+  <div id="pl-errmsg" class="banner" hidden></div>
+
+  <div class="progress-wrap">
+    <input id="pl-seek" type="range" min="0" max="1000" value="0" step="1" aria-label="进度">
+    <div class="time-row"><span id="pl-cur">0:00</span><span id="pl-dur">0:00</span></div>
+  </div>
+
+  <div class="controls">
+    <button class="ctrl" id="btn-back5">«5s</button>
+    <button class="ctrl big" id="btn-play">▶</button>
+    <button class="ctrl" id="btn-fwd5">5s»</button>
+  </div>
+
+  <div class="tool-row">
+    <button class="chip" id="btn-speed">1.0×</button>
+    <button class="chip" id="btn-a">A 点</button>
+    <button class="chip" id="btn-b">B 点</button>
+    <button class="chip" id="btn-ab-clear">清除循环</button>
+    <button class="chip" id="btn-sleep">定时 关</button>
+  </div>
+  <div id="ab-info" class="muted small" hidden></div>
+
+  <div class="trans-head">
+    <span>文稿</span>
+    <button class="chip small" id="btn-follow">跟随 关</button>
+  </div>
+  <div id="transcript" class="transcript"></div>
+  <p id="no-transcript" class="muted" hidden>本集没有抓到文稿（可在电脑上重跑抓取，或用下方链接打开原页）。</p>
+  <a id="pl-source" class="muted small" href="#" target="_blank" rel="noopener" hidden>打开 BBC 原页面 ↗</a>
+</main>
+
+<main id="view-vocab" class="view" hidden>
+  <h1>生词本</h1>
+  <p class="muted" id="vocab-meta"></p>
+  <div id="vocab-list" class="list"></div>
+  <div class="tool-row">
+    <button class="chip" id="btn-vocab-export">导出 CSV</button>
+    <button class="chip" id="btn-vocab-clear">清空</button>
+  </div>
+</main>
+
+<main id="view-settings" class="view" hidden>
+  <h1>设置</h1>
+  <div class="list">
+    <div class="row"><div><b>离线缓存全部音频</b><div class="muted small">把已下载的音频写入手机缓存，之后断网也能听</div></div><button class="chip" id="btn-cache-all">开始</button></div>
+    <div class="row"><div><b>清除离线缓存</b><div class="muted small">释放手机空间</div></div><button class="chip" id="btn-cache-clear">清除</button></div>
+    <div class="row"><div><b>界面字号</b></div><div><button class="chip" id="btn-font-sm">A-</button> <button class="chip" id="btn-font-lg">A+</button></div></div>
+  </div>
+  <p class="muted small" id="cache-stat"></p>
+  <h2>关于</h2>
+  <p class="muted small">
+    本应用只是把 BBC Learning English 公开页面的音频与文稿抓到本地，方便离线学习。
+    内容版权归 BBC 所有，请勿二次分发或用于商业用途。
+  </p>
+</main>
+
+<div id="sheet" class="sheet" hidden>
+  <div class="sheet-inner">
+    <div class="sheet-word" id="sheet-word"></div>
+    <button class="chip wide" id="sheet-add">加入生词本</button>
+    <button class="chip wide" id="sheet-speak">朗读本句</button>
+    <button class="chip wide" id="sheet-copy">复制本句</button>
+    <button class="chip wide ghost" id="sheet-close">取消</button>
+  </div>
+</div>
+
+<nav id="tabbar">
+  <button class="tab active" data-view="home">课程</button>
+  <button class="tab" data-view="vocab">生词本</button>
+  <button class="tab" data-view="settings">设置</button>
+</nav>
+
+<script src="app.js"></script>
+<script>
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,27 @@
+{
+  "name": "bbc-learning-english-offline",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "把 BBC Learning English（Easy Courses）抓成离线学习包，并打包成手机 PWA / APK",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "probe": "node src/fetch.mjs probe",
+    "courses": "node src/fetch.mjs courses",
+    "crawl": "node src/fetch.mjs crawl",
+    "download": "node src/fetch.mjs download",
+    "build": "node src/fetch.mjs build",
+    "dist": "node tools/build-dist.mjs",
+    "verify": "node tools/verify.mjs",
+    "serve": "node tools/serve.mjs dist",
+    "check": "node tools/verify.mjs",
+    "clear-cache": "node --input-type=module -e \"import fs from 'node:fs'; fs.rmSync('.cache',{recursive:true,force:true}); console.log('已清空 .cache')\"",
+    "start": "npm run dist && npm run serve",
+    "apk:install": "npm i -D @capacitor/cli @capacitor/core @capacitor/android",
+    "apk:add": "npx cap add android",
+    "apk:sync": "npx cap copy android && npx cap sync android",
+    "apk:open": "npx cap open android"
+  }
+}

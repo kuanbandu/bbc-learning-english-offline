@@ -1,0 +1,19 @@
+# 依赖
+node_modules/
+android/
+
+# 产物与抓取结果（运行 npm run build 会自动重新生成）
+dist/
+
+# content/ 里是抓下来的 BBC 音频与文稿，版权归 BBC。
+# 只在你本机留着学习用，不要提交到公开仓库。
+content/
+.cache/
+
+# 杂项
+*.log
+*.txt
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
