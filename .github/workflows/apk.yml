@@ -22,7 +22,8 @@ jobs:
       - name: 准备 Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          # Capacitor 8 的 CLI 要求 Node >= 22
+          node-version: '22'
 
       - name: 准备 JDK
         uses: actions/setup-java@v5
