@@ -87,6 +87,17 @@ function renderHome() {
     `<div>共 <b>${series.length}</b> 个节目 · <b>${eps.length}</b> 集</div>` +
     `<div class="muted small">已下载音频 ${downloaded} 集 · 已听完 ${listened} 集 · 生词 ${LS.get(KEY_VOCAB, []).length} 个</div>`;
 
+  // 课程数据是空的（典型情况：APK 里没打包内容）
+  if (!eps.length) {
+    $('#home-levels').innerHTML =
+      `<div class="banner">这个 App 里还没有课程内容。</div>` +
+      `<div class="summary">
+         <div>音频和文稿的版权归 BBC，不会跟着代码一起发布，需要在你自己的电脑上抓取后再打包进来。</div>
+         <div class="muted small" style="margin-top:.5rem">最快的办法：电脑上跑 <b>npm start</b>，手机连同一个 WiFi 打开提示的地址。</div>
+       </div>`;
+    return;
+  }
+
   const groups = new Map();
   for (const s of series) {
     const k = s.level || '其他';
