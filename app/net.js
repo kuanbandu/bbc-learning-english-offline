@@ -213,22 +213,42 @@ function b64ToBytes(b64) {
 
 // 下载/播放二进制：优先 https，失败再退回原始 http
 // （BBC 有不少老资源是 http://，安卓 9+ 默认拦截明文 HTTP）
-async function getBinary(http, url, headers) {
+// onProgress(loaded, total)：total 为 -1 表示服务器没给长度
+let _pidSeq = 0;
+async function getBinary(http, url, headers, onProgress) {
+  const pid = onProgress ? `dl${++_pidSeq}_${Date.now()}` : null;
+  let listener = null;
+  if (pid && typeof http.addListener === 'function') {
+    try {
+      listener = await http.addListener('downloadProgress', (d) => {
+        if (!d || d.id !== pid) return;
+        try { onProgress(Number(d.loaded) || 0, Number(d.total) || -1); } catch { /* 忽略 */ }
+      });
+    } catch { listener = null; }
+  }
+
   const list = /^http:/i.test(url) ? [url.replace(/^http:/i, 'https:'), url] : [url];
   let lastErr = null;
-  for (const u of list) {
-    try {
-      const r = await http.get({
-        url: u,
-        headers: { 'User-Agent': UA, Accept: '*/*', ...(headers || {}) },
-        responseType: 'arraybuffer',
-        connectTimeout: 25000,
-        readTimeout: 300000,
-      });
-      if (r.status && r.status >= 400) throw new Error('HTTP ' + r.status);
-      return { url: u, res: r };
-    } catch (e) {
-      lastErr = e;
+  try {
+    for (const u of list) {
+      try {
+        const r = await http.get({
+          url: u,
+          headers: { 'User-Agent': UA, Accept: '*/*', ...(headers || {}) },
+          responseType: 'arraybuffer',
+          connectTimeout: 25000,
+          readTimeout: 300000,
+          ...(pid ? { progressId: pid } : {}),
+        });
+        if (r.status && r.status >= 400) throw new Error('HTTP ' + r.status);
+        return { url: u, res: r };
+      } catch (e) {
+        lastErr = e;
+      }
+    }
+  } finally {
+    if (listener && typeof listener.remove === 'function') {
+      try { await listener.remove(); } catch { /* 忽略 */ }
     }
   }
   throw lastErr || new Error('下载失败');
@@ -244,7 +264,8 @@ async function fetchAudioBlob(url) {
 }
 
 // 返回 { ok, ep } 或抛错。有视频时把 mp4 一起存下来（视频失败不影响音频）
-async function downloadEpisode(ep) {
+// onProgress({ phase:'audio'|'video', loaded, total }) 用于界面进度条
+async function downloadEpisode(ep, onProgress) {
   const http = getHttp();
   const fs = getFS();
   if (!http) throw new Error('当前环境不支持原生网络请求（请用安卓 App 打开）');
@@ -259,9 +280,13 @@ async function downloadEpisode(ep) {
   const base = safeName(full.id);
   let localPath = null;
   let localVideoPath = null;
+  const report = (phase) => (loaded, total) => {
+    if (!onProgress) return;
+    try { onProgress({ phase, loaded, total }); } catch { /* 忽略 */ }
+  };
 
   if (full.audioUrl) {
-    const { res } = await getBinary(http, full.audioUrl);
+    const { res } = await getBinary(http, full.audioUrl, null, report('audio'));
     const b64 = typeof res.data === 'string' ? res.data : abToB64(res.data);
     const p = `${dir}/${base}.mp3`;
     await fs.writeFile({ path: p, data: b64, directory: 'DATA', recursive: true });
@@ -271,7 +296,7 @@ async function downloadEpisode(ep) {
   let videoError = null;
   if (full.videoUrl) {
     try {
-      const { res } = await getBinary(http, full.videoUrl);
+      const { res } = await getBinary(http, full.videoUrl, null, report('video'));
       const b64 = typeof res.data === 'string' ? res.data : abToB64(res.data);
       const p = `${dir}/${base}.mp4`;
       await fs.writeFile({ path: p, data: b64, directory: 'DATA', recursive: true });
@@ -294,6 +319,7 @@ async function downloadEpisode(ep) {
     localPath,
     localVideoPath,
     videoError,
+    hasVideo: !!(localVideoPath || full.videoUrl),
     level: full.level,
     at: Date.now(),
   };

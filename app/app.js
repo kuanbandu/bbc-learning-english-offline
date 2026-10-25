@@ -33,6 +33,10 @@ function useVideo() {
 }
 
 let loopA = null, loopB = null, sleepTimer = null, follow = false;
+// 每句的归一化起始时间（0~1）。BBC 页面不提供逐句时间戳，
+// 用“句子字符数”加权估算，比按句数平均分配准得多。
+let sentT = [];
+let followHold = 0; // 用户手动滚动文稿后的暂停截止时间
 const SPEEDS = [0.6, 0.8, 1.0, 1.25, 1.5, 2.0];
 let speedIdx = 2;
 
@@ -42,6 +46,24 @@ const fmtTime = (s) => {
   const m = Math.floor(s / 60), r = Math.floor(s % 60);
   return `${m}:${String(r).padStart(2, '0')}`;
 };
+const fmtSize = (n) => {
+  if (!n || n < 0) return '';
+  if (n < 1024) return `${n}B`;
+  if (n < 1048576) return `${(n / 1024).toFixed(0)}KB`;
+  return `${(n / 1048576).toFixed(1)}MB`;
+};
+
+// 播放页高度 = 视口 - 顶栏 - 底部标签栏，保证控件常在、只有文稿区滚动
+function layoutPlayer() {
+  const vp = $('#view-player');
+  if (!vp || vp.hidden) return;
+  const top = $('#topbar') ? $('#topbar').getBoundingClientRect().height : 0;
+  const tab = $('#tabbar') ? $('#tabbar').getBoundingClientRect().height : 0;
+  vp.style.height = `${Math.max(240, window.innerHeight - top - tab)}px`;
+}
+window.addEventListener('resize', () => {
+  if (!$('#view-player').hidden) layoutPlayer();
+});
 const epKey = (s, e) => `${s.id}/${e.id || e.title}`;
 const epAudioUrl = (e) => (e.audioFile ? `content/${e.audioFile}` : e.audioUrl);
 const clean = (w) => w.replace(/^[^\p{L}\p{N}'’-]+|[^\p{L}\p{N}'’-]+$/gu, '');
@@ -57,6 +79,9 @@ function show(view, { push = true, tab = false } = {}) {
   $('#btn-back').hidden = !(stack.length > 1 && view !== 'home' && view !== 'vocab' && view !== 'settings');
   $('#topbar').style.display = view === 'home' ? '' : '';
   $$('.tab').forEach((t) => t.classList.toggle('active', t.dataset.view === view));
+  // 播放页用固定高度 + 内部滚动：切走时要把 body 的滚动恢复
+  document.body.classList.toggle('in-player', view === 'player');
+  if (view === 'player') requestAnimationFrame(() => layoutPlayer());
   if (view === 'download') renderDownload();
   window.scrollTo(0, 0);
 }
@@ -319,10 +344,48 @@ function resetProgressUI(e) {
   seek.value = 0;
 }
 
+function buildSentenceTimes(sents) {
+  const lens = sents.map((s) => Math.max(1, String(s).length));
+  const total = lens.reduce((a, b) => a + b, 0) || 1;
+  let acc = 0;
+  sentT = lens.map((l) => {
+    const t = acc / total;
+    acc += l;
+    return t;
+  });
+}
+
+function sentenceAt(ratio) {
+  if (!sentT.length) return 0;
+  let lo = 0;
+  let hi = sentT.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (sentT[mid] <= ratio) lo = mid;
+    else hi = mid - 1;
+  }
+  return lo;
+}
+
+function markCurrent(i, doScroll) {
+  const sents = $$('#transcript .sent');
+  if (!sents[i]) return;
+  sents.forEach((x) => x.classList.remove('cur'));
+  sents[i].classList.add('cur');
+  if (!doScroll) return;
+  const box = $('#transcript');
+  if (!box) return;
+  // 只滚文稿容器，绝不碰整页（否则会把播放按钮顶出屏幕）
+  const top = sents[i].offsetTop - box.clientHeight / 2 + sents[i].offsetHeight / 2;
+  box.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
+}
+
 function renderTranscript() {
   const box = $('#transcript');
   const sents = curEp.transcript || [];
   $('#no-transcript').hidden = sents.length > 0;
+  buildSentenceTimes(sents);
+  if (box) box.scrollTop = 0;
   box.innerHTML = sents
     .map(
       (s, i) =>
@@ -339,12 +402,20 @@ function renderTranscript() {
       openSheet(w.textContent, w.parentElement);
     };
   });
-  $$('#transcript .sent').forEach((s) => {
+  // 点句子＝把播放位置跳到这句（BBC 没有逐句时间戳，这里按字符权重估算），
+  // 这样“跟随不准”时用户可以自己手动校正
+  $$('#transcript .sent').forEach((s, i) => {
     s.onclick = () => {
-      $$('#transcript .sent').forEach((x) => x.classList.remove('cur'));
-      s.classList.add('cur');
+      markCurrent(i, false);
+      if (player.duration && sentT[i] !== undefined) {
+        player.currentTime = sentT[i] * player.duration;
+      }
+      followHold = 0;
+      $('#trans-hint').textContent = '';
     };
   });
+  const hint = $('#trans-hint');
+  if (hint) hint.textContent = '';
 }
 
 /* ---------------- 播放器控制 ---------------- */
@@ -383,8 +454,11 @@ $('#btn-sleep').onclick = () => {
 
 $('#btn-follow').onclick = () => {
   follow = !follow;
+  followHold = 0;
   $('#btn-follow').textContent = `跟随 ${follow ? '开' : '关'}`;
   $('#btn-follow').classList.toggle('on', follow);
+  const hint = $('#trans-hint');
+  if (hint) hint.textContent = follow ? '点句子可跳转' : '';
 };
 
 const seek = $('#pl-seek');
@@ -419,6 +493,15 @@ function bindMedia(el) {
   });
 }
 bindMedia(audioEl);
+
+// 一动手滚文稿就暂停跟随 8 秒：用户想往回看，不能被自动滚动拽走
+const trBox = $('#transcript');
+if (trBox) {
+  const hold = () => { if (follow) followHold = Date.now() + 8000; };
+  trBox.addEventListener('touchstart', hold, { passive: true });
+  trBox.addEventListener('wheel', hold, { passive: true });
+  trBox.addEventListener('mousedown', hold);
+}
 
 if (videoEl) {
   bindMedia(videoEl);
@@ -455,15 +538,22 @@ function saveProgress(done = false) {
 }
 
 function autoFollow() {
+  const box = $('#transcript');
+  if (!box || !player.duration) return;
   const sents = $$('#transcript .sent');
-  if (!sents.length || !player.duration) return;
-  const i = Math.min(sents.length - 1, Math.floor((player.currentTime / player.duration) * sents.length));
-  const s = sents[i];
-  if (!s.classList.contains('cur')) {
-    $$('#transcript .sent').forEach((x) => x.classList.remove('cur'));
-    s.classList.add('cur');
-    s.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  if (!sents.length) return;
+
+  const hint = $('#trans-hint');
+  // 用户刚手动滚过：先别抢滚动条
+  if (Date.now() < followHold) {
+    if (hint) hint.textContent = '（已暂停跟随）';
+    return;
   }
+  if (hint) hint.textContent = '';
+
+  const i = sentenceAt(player.currentTime / player.duration);
+  if (sents[i].classList.contains('cur')) return;
+  markCurrent(i, true);
 }
 
 function autoNext() {
@@ -589,6 +679,7 @@ async function updateCacheStat() {
 
 /* ---------------- 在线下载 ---------------- */
 let dlState = { level: null, series: null };
+let dlBatch = null; // 批量下载时的 { done, total }，只用于显示进度前缀
 
 // 把网络错误翻译成用户能照着做的建议
 function hintForNetError(msg) {
@@ -750,15 +841,17 @@ function renderDlEpisodes() {
   const done = s.episodes.filter((e) => window.BBCNet.getStored(s.id, e.id)).length;
   body.innerHTML =
     `<div class="series-head"><h1>${escapeHtml(s.title)}</h1><p class="muted">共 ${s.episodes.length} 集 · 已下载 ${done} 集</p></div>` +
+    '<p class="muted small">BBC 只有部分节目提供视频。点「下载」会自动检测：有视频就把音频＋视频一起存，没有就只存音频（会标注「仅音频」）。</p>' +
     '<div class="tool-row"><button class="chip" id="dl-all">下载全部</button><button class="chip" id="dl-back">返回栏目</button></div>' +
     '<div class="list">' +
     s.episodes
       .map((e, i) => {
         const st = window.BBCNet.getStored(s.id, e.id);
+        const media = st ? (st.localVideoPath ? '含视频' : (st.videoUrl ? '视频未下载' : '仅音频')) : '';
         const actions = st
           ? `<button class="chip dl-play" data-i="${i}">播放</button><button class="chip ghost dl-del" data-i="${i}">删除</button>`
           : `<button class="chip dl-btn" data-i="${i}">下载</button>`;
-        return `<div class="row" data-i="${i}"><div class="ep"><div class="body"><div class="t">${escapeHtml(e.title || e.id)}</div><div class="m">${escapeHtml(e.date || '')}</div></div></div><div class="dl-actions">${actions}</div></div>`;
+        return `<div class="row" data-i="${i}"><div class="ep"><div class="body"><div class="t">${escapeHtml(e.title || e.id)}</div><div class="m">${escapeHtml(e.date || '')}${media ? ` · ${media}` : ''}</div></div></div><div class="dl-actions">${actions}</div></div>`;
       })
       .join('') +
     '</div><div id="dl-progress" class="muted small"></div>';
@@ -786,30 +879,49 @@ function renderDlEpisodes() {
 
 async function downloadOne(s, i) {
   const e = s.episodes[i];
-  const btn = $(`#dl-body .row[data-i="${i}"] .dl-btn`);
-  if (btn) { btn.disabled = true; btn.textContent = '下载中…'; }
+  const row = $(`#dl-body .row[data-i="${i}"]`);
+  const btn = row ? row.querySelector('.dl-btn') : null;
   const prog = $('#dl-progress');
+  if (btn) { btn.disabled = true; btn.textContent = '准备…'; }
+  if (row) { row.classList.add('downloading'); row.style.setProperty('--p', '3%'); }
   try {
-    const r = await window.BBCNet.downloadEpisode(e);
+    const r = await window.BBCNet.downloadEpisode(e, ({ phase, loaded, total }) => {
+      const pct = total > 0 ? Math.min(99, Math.round((loaded / total) * 100)) : 0;
+      if (row) row.style.setProperty('--p', `${pct || 3}%`);
+      const text = total > 0 ? `${pct}%` : fmtSize(loaded);
+      if (btn) btn.textContent = (phase === 'video' ? '视频 ' : '') + text;
+      const prefix = dlBatch ? `[${dlBatch.done + 1}/${dlBatch.total}] ` : '';
+      if (prog) prog.textContent = `${prefix}${phase === 'video' ? '正在下载视频' : '正在下载音频'} ${text}`;
+    });
     addLocalEpisode(r.ep);
+    if (row) row.classList.remove('downloading');
     renderDlEpisodes();
     const p2 = $('#dl-progress');
     if (p2) {
-      const extra = r.ep.localVideoPath ? '（视频 + 音频）' : (r.ep.videoError ? '（只有音频，视频没下来）' : '');
+      let extra = '（本集 BBC 未提供视频）';
+      if (r.ep.localVideoPath) extra = '（音频 + 视频）';
+      else if (r.ep.videoUrl) extra = '（视频下载失败，音频已存）';
       p2.textContent = `已下载：${r.ep.title}${extra}`;
     }
   } catch (err) {
     if (btn) { btn.disabled = false; btn.textContent = '重试'; }
+    if (row) row.classList.remove('downloading');
     const hint = hintForNetError(err.message || err);
     if (prog) prog.textContent = `下载失败：${err.message || err}` + (hint ? `　${hint}` : '');
   }
 }
 
 async function downloadAll(s) {
-  for (let i = 0; i < s.episodes.length; i++) {
-    if (window.BBCNet.getStored(s.id, s.episodes[i].id)) continue;
-    await downloadOne(s, i);
+  const todo = [];
+  s.episodes.forEach((e, i) => { if (!window.BBCNet.getStored(s.id, e.id)) todo.push(i); });
+  if (!todo.length) return;
+  for (let k = 0; k < todo.length; k++) {
+    dlBatch = { done: k, total: todo.length };
+    await downloadOne(s, todo[k]);
   }
+  dlBatch = null;
+  const prog = $('#dl-progress');
+  if (prog) prog.textContent = `批量下载完成，共 ${todo.length} 集`;
 }
 
 function openLocalEpisode(st) {

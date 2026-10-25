@@ -98,6 +98,8 @@ public class HttpBridgePlugin extends Plugin {
         String responseType = call.getString("responseType", "text");
         int connectTimeout = call.getInt("connectTimeout", 30000);
         int readTimeout = call.getInt("readTimeout", 600000);
+        // 传入 progressId 时，边读边发 downloadProgress 事件，前端据此显示进度条
+        final String progressId = call.getString("progressId");
 
         final String rt = responseType;
         final JSONObject hdrs = headersObj;
@@ -115,9 +117,12 @@ public class HttpBridgePlugin extends Plugin {
                 conn.connect();
                 int code = conn.getResponseCode();
                 InputStream in = code < 400 ? conn.getInputStream() : conn.getErrorStream();
-                byte[] bytes = readAll(in);
+                long total = -1;
+                try { total = conn.getContentLengthLong(); } catch (Throwable ignore) { /* 分块传输没有长度 */ }
+                byte[] bytes = readAll(in, progressId, total);
                 JSObject ret = new JSObject();
                 ret.put("status", code);
+                ret.put("bytes", bytes.length);
                 ret.put("viaProxy", proxyText(proxy));
                 if ("arraybuffer".equals(rt)) {
                     ret.put("data", Base64.encodeToString(bytes, Base64.NO_WRAP));
@@ -178,10 +183,45 @@ public class HttpBridgePlugin extends Plugin {
     }
 
     private static byte[] readAll(InputStream in) throws IOException {
-        ByteArrayOutputStream bos = new ByteArrayOutputStream();
-        byte[] buf = new byte[8192];
+        return readAll(in, null, -1);
+    }
+
+    /**
+     * 读完整流。progressId 非空时，每 ~150ms 回调一次 downloadProgress，避免刷屏。
+     * total 为 -1 表示服务器没给 Content-Length（分块传输）。
+     */
+    private byte[] readAll(InputStream in, String progressId, long total) throws IOException {
+        // 只在“已知且不算太大”时按总量预分配，避免一次性申请过大内存
+        int cap = (total > 0 && total < 32L * 1024 * 1024) ? (int) total : 8192;
+        ByteArrayOutputStream bos = new ByteArrayOutputStream(Math.max(cap, 8192));
+        byte[] buf = new byte[16384];
         int n;
-        while ((n = in.read(buf)) != -1) bos.write(buf, 0, n);
+        long loaded = 0;
+        long lastEmit = 0;
+        while ((n = in.read(buf)) != -1) {
+            bos.write(buf, 0, n);
+            loaded += n;
+            if (progressId != null) {
+                long now = System.currentTimeMillis();
+                if (now - lastEmit >= 150) {
+                    lastEmit = now;
+                    emitProgress(progressId, loaded, total);
+                }
+            }
+        }
+        if (progressId != null) emitProgress(progressId, loaded, total);
         return bos.toByteArray();
+    }
+
+    private void emitProgress(String progressId, long loaded, long total) {
+        try {
+            JSObject o = new JSObject();
+            o.put("id", progressId);
+            o.put("loaded", loaded);
+            o.put("total", total);
+            notifyListeners("downloadProgress", o);
+        } catch (Throwable ignore) {
+            // 页面已销毁等情况忽略即可，不影响下载
+        }
     }
 }

@@ -33,39 +33,43 @@
 </main>
 
 <main id="view-player" class="view" hidden>
-  <div class="player-head">
-    <h1 id="pl-title"></h1>
-    <p id="pl-meta" class="muted"></p>
+  <!-- 固定区：播放控件始终可见，只有下面的文稿区滚动 -->
+  <div class="pl-fixed">
+    <div class="player-head">
+      <h1 id="pl-title"></h1>
+      <p id="pl-meta" class="muted"></p>
+    </div>
+
+    <div id="pl-errmsg" class="banner" hidden></div>
+
+    <video id="pl-video" class="player-video" playsinline controls hidden></video>
+
+    <div class="progress-wrap">
+      <input id="pl-seek" type="range" min="0" max="1000" value="0" step="1" aria-label="进度">
+      <div class="time-row"><span id="pl-cur">0:00</span><span id="pl-dur">0:00</span></div>
+    </div>
+
+    <div class="controls">
+      <button class="ctrl" id="btn-back5">«5s</button>
+      <button class="ctrl big" id="btn-play">▶</button>
+      <button class="ctrl" id="btn-fwd5">5s»</button>
+    </div>
+
+    <div class="tool-row">
+      <button class="chip" id="btn-speed">1.0×</button>
+      <button class="chip" id="btn-a">A 点</button>
+      <button class="chip" id="btn-b">B 点</button>
+      <button class="chip" id="btn-ab-clear">清除循环</button>
+      <button class="chip" id="btn-sleep">定时 关</button>
+    </div>
+    <div id="ab-info" class="muted small" hidden></div>
+
+    <div class="trans-head">
+      <span>文稿<span id="trans-hint" class="muted small"></span></span>
+      <button class="chip small" id="btn-follow">跟随 关</button>
+    </div>
   </div>
 
-  <div id="pl-errmsg" class="banner" hidden></div>
-
-  <video id="pl-video" class="player-video" playsinline controls hidden></video>
-
-  <div class="progress-wrap">
-    <input id="pl-seek" type="range" min="0" max="1000" value="0" step="1" aria-label="进度">
-    <div class="time-row"><span id="pl-cur">0:00</span><span id="pl-dur">0:00</span></div>
-  </div>
-
-  <div class="controls">
-    <button class="ctrl" id="btn-back5">«5s</button>
-    <button class="ctrl big" id="btn-play">▶</button>
-    <button class="ctrl" id="btn-fwd5">5s»</button>
-  </div>
-
-  <div class="tool-row">
-    <button class="chip" id="btn-speed">1.0×</button>
-    <button class="chip" id="btn-a">A 点</button>
-    <button class="chip" id="btn-b">B 点</button>
-    <button class="chip" id="btn-ab-clear">清除循环</button>
-    <button class="chip" id="btn-sleep">定时 关</button>
-  </div>
-  <div id="ab-info" class="muted small" hidden></div>
-
-  <div class="trans-head">
-    <span>文稿</span>
-    <button class="chip small" id="btn-follow">跟随 关</button>
-  </div>
   <div id="transcript" class="transcript"></div>
   <p id="no-transcript" class="muted" hidden>本集没有抓到文稿（可在电脑上重跑抓取，或用下方链接打开原页）。</p>
   <a id="pl-source" class="muted small" href="#" target="_blank" rel="noopener" hidden>打开 BBC 原页面 ↗</a>
@@ -85,6 +89,7 @@
   <div class="summary">
     <div>在线获取 BBC 课程，下载到手机后离线学习。</div>
     <div class="muted small">下载功能仅在安卓 App（APK）内可用；用浏览器打开时只能浏览目录、不能下载音频。</div>
+    <div class="muted small">视频：BBC 只有部分节目提供，点「下载」时会自动检测，有就音频＋视频一起存。</div>
   </div>
   <div id="dl-levels" class="level-tabs"></div>
   <div id="dl-diag"></div>

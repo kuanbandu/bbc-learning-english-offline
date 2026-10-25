@@ -36,6 +36,19 @@ h2{font-size:1rem;margin:1.4rem 0 .4rem}
 .icon-btn{background:transparent;border:0;color:#fff;font-size:1.5rem;width:2rem;height:2rem;line-height:1;border-radius:8px}
 
 .view{padding:.9rem}
+
+/* 播放页：顶部控件固定，只有文稿区滚动。
+   之前 autoFollow 用的是 scrollIntoView，滚的是整个页面，
+   结果播放按钮被顶到屏幕外，没法暂停/调进度。 */
+body.in-player{padding-bottom:0;overflow:hidden}
+#view-player{display:flex;flex-direction:column;min-height:0}
+#view-player .pl-fixed{flex:0 0 auto}
+#view-player .player-video{max-height:32vh}
+#view-player .transcript{
+  flex:1 1 auto;min-height:0;overflow-y:auto;position:relative;
+  overscroll-behavior:contain;-webkit-overflow-scrolling:touch;
+}
+#trans-hint{margin-left:.4rem;font-weight:400}
 .summary{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:.8rem 1rem;margin-bottom:1rem;font-size:.9rem}
 .summary b{color:var(--brand);font-size:1.1rem}
 
@@ -125,3 +138,9 @@ a{color:var(--brand)}
 .dl-btn{min-width:72px}
 .dl-actions{display:flex;gap:.35rem;flex-shrink:0}
 #dl-body .row .ep{cursor:pointer}
+/* 下载进度：行底部的细进度条，宽度由 --p 控制 */
+.row.downloading{position:relative}
+.row.downloading::after{
+  content:'';position:absolute;left:0;bottom:0;height:3px;width:var(--p,0%);
+  max-width:100%;background:var(--brand);border-radius:2px;transition:width .15s linear;
+}
