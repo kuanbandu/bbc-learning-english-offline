@@ -63,7 +63,13 @@ const safeName = (s) => String(s || 'x').replace(/[^a-zA-Z0-9_-]+/g, '_').slice(
 async function getText(url) {
   const http = getHttp();
   if (http) {
-    const r = await http.get({ url, headers: HEADERS });
+    // 明确超时：默认读超时是 10 分钟，网络不通时会让人以为“卡死”
+    const r = await http.get({
+      url,
+      headers: HEADERS,
+      connectTimeout: 20000,
+      readTimeout: 60000,
+    });
     if (r.status && r.status >= 400) throw new Error('HTTP ' + r.status);
     return typeof r.data === 'string' ? r.data : '';
   }
@@ -71,6 +77,19 @@ async function getText(url) {
   const res = await fetch(url, { headers: HEADERS });
   if (!res.ok) throw new Error('HTTP ' + res.status);
   return await res.text();
+}
+
+// 网络自检：DNS 解析 → 系统代理 → HTTPS 探测，返回每一步的结果
+async function diag() {
+  const http = getHttp();
+  if (!http || typeof http.diag !== 'function') {
+    return { ok: false, error: '当前环境不支持自检（需要安卓 App）' };
+  }
+  return await http.diag({
+    url: 'https://www.bbc.co.uk/learningenglish',
+    host: 'www.bbc.co.uk',
+    timeout: 12000,
+  });
 }
 const httpAdapter = { getText };
 
@@ -84,23 +103,46 @@ function setCatalog(c) {
 }
 
 async function fetchCatalog() {
-  const courses = [];
-  for (const entry of ENTRY_URLS) {
-    let course = { id: entry.id, label: entry.label, url: entry.url, series: [] };
-    try {
-      const html = await getText(entry.url);
-      const c = parseCoursePage(html, entry.url);
-      course.series = (c.series || []).map((s) => ({
-        id: safeName(s.url),
-        title: s.text || s.url,
-        url: s.url,
-        level: entry.label,
-      }));
-    } catch (e) {
-      course.error = String(e.message || e);
-    }
-    courses.push(course);
+  const prev = getCatalog();
+
+  // 四个栏目录并发抓取：任一失败不影响其它；每个失败重试一次（网络抖动很常见）
+  const courses = await Promise.all(
+    ENTRY_URLS.map(async (entry) => {
+      const course = { id: entry.id, label: entry.label, url: entry.url, series: [], error: '' };
+      let lastErr = '';
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const html = await getText(entry.url);
+          const c = parseCoursePage(html, entry.url);
+          course.series = (c.series || []).map((s) => ({
+            id: safeName(s.url),
+            title: s.text || s.url,
+            url: s.url,
+            level: entry.label,
+          }));
+          course.error = '';
+          return course;
+        } catch (e) {
+          lastErr = String((e && e.message) || e);
+          if (attempt === 0) await new Promise((r) => setTimeout(r, 500));
+        }
+      }
+      course.error = lastErr;
+      return course;
+    })
+  );
+
+  const anyOk = courses.some((c) => c.series.length);
+  const prevOk = !!(prev && Array.isArray(prev.courses) && prev.courses.some((c) => c.series && c.series.length));
+
+  // 这次全失败但有历史成功数据：保留旧目录，避免用户白屏
+  if (!anyOk && prevOk) {
+    const firstErr = (courses.find((c) => c.error) || {}).error || '';
+    const kept = { ...prev, stale: true, lastError: firstErr };
+    setCatalog(kept); // 写回，保证界面重新渲染时还能看到 stale 标记
+    return kept;
   }
+
   const out = { at: Date.now(), courses };
   setCatalog(out);
   return out;
@@ -252,6 +294,7 @@ async function localSrc(localPath) {
 const API = {
   isNative,
   ENTRY_URLS,
+  diag,
   getCatalog,
   fetchCatalog,
   fetchSeries,

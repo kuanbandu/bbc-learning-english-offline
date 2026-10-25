@@ -505,9 +505,54 @@ async function updateCacheStat() {
 /* ---------------- 在线下载 ---------------- */
 let dlState = { level: null, series: null };
 
+// 把网络错误翻译成用户能照着做的建议
+function hintForNetError(msg) {
+  const s = String(msg || '');
+  if (!s) return '';
+  if (/Failed to connect|ECONNREFUSED|ECONNRESET|EHOSTUNREACH|ENETUNREACH|No route to host/i.test(s)) {
+    return '连不上 BBC 服务器。如果你正在用代理，多半是这个 App 的流量没走代理（常见于“分应用代理 / 应用分流”白名单模式，或代理只对浏览器生效）。请把「BBC 轻松英语」加入代理的应用列表，或改用全局 / TUN（VPN）模式，然后点「刷新目录」。';
+  }
+  if (/UnknownHost|Unable to resolve host|No address associated/i.test(s)) {
+    return '域名解析失败。代理的 DNS 没返回可用地址（fake-ip 模式下很常见），建议把代理的 DNS 改成 redir-host / 真实 IP 模式后再试。';
+  }
+  if (/timed out|timeout|Read timed out/i.test(s)) {
+    return '连接超时。检查代理节点是否可用，或换一个网络（Wi-Fi / 移动数据）再试。';
+  }
+  if (/SSL|Certificate|handshake|CertPathValidator/i.test(s)) {
+    return 'TLS 握手失败，可能被代理的证书拦截了。关掉代理的 HTTPS 解密（MITM）后重试。';
+  }
+  return '';
+}
+
+async function runDiag() {
+  const box = $('#dl-diag');
+  if (!box) return;
+  box.innerHTML = '<div class="muted small">正在自检：DNS → 系统代理 → HTTPS…</div>';
+  try {
+    const r = await window.BBCNet.diag();
+    const parts = [];
+    parts.push('DNS：' + ((r.dns && r.dns.length) ? r.dns.join(' , ') : (r.dnsError || '解析失败')));
+    parts.push('系统代理：' + (r.proxy || '未设置（直连）'));
+    if (r.ok) parts.push(`HTTPS：成功 HTTP ${r.status} · ${r.ms}ms`);
+    else parts.push('HTTPS：失败 ' + (r.error || '未知') + ` · ${r.ms}ms`);
+
+    const tip = r.ok ? '' : hintForNetError(r.error || r.dnsError);
+    box.innerHTML =
+      '<div class="summary"><div class="small">' + parts.map((x) => escapeHtml(x)).join('<br>') + '</div>' +
+      (tip ? '<div class="muted small" style="margin-top:.45rem">' + escapeHtml(tip) + '</div>' : '') +
+      (r.ok ? '<div class="small" style="margin-top:.45rem">网络是通的，点「刷新目录」重新抓一次即可。</div>' : '') +
+      '</div>';
+  } catch (e) {
+    box.innerHTML = '<div class="banner">自检失败：' + escapeHtml(String((e && e.message) || e)) + '</div>';
+  }
+}
+
 function renderDownload() {
   const body = $('#dl-body');
   const levels = $('#dl-levels');
+  const dbox = $('#dl-diag');
+  if (dbox) dbox.innerHTML = '';
+
   // 1) 下载模块没加载出来（安装包里文件缺失、或被系统拦截）
   if (!window.BBCNet) {
     levels.innerHTML = '';
@@ -530,21 +575,55 @@ function renderDownload() {
     if (r2) r2.onclick = () => renderDownload();
     return;
   }
+
   const cat = window.BBCNet.getCatalog();
   levels.innerHTML =
     window.BBCNet.ENTRY_URLS.map(
       (e) => `<button class="chip ${dlState.level === e.id ? 'active' : ''}" data-level="${e.id}">${e.label}</button>`
-    ).join('') + '<button class="chip" id="dl-refresh">刷新目录</button>';
+    ).join('') +
+    '<button class="chip" id="dl-refresh">刷新目录</button>' +
+    '<button class="chip" id="dl-check">网络自检</button>';
   $$('#dl-levels [data-level]').forEach((b) => (b.onclick = () => { dlState.level = b.dataset.level; dlState.series = null; renderDownload(); }));
-  $('#dl-refresh').onclick = async () => { dlState.level = null; dlState.series = null; body.innerHTML = '<p class="muted">正在刷新目录…</p>'; levels.innerHTML = ''; await window.BBCNet.fetchCatalog(); renderDownload(); };
+  $('#dl-check').onclick = () => runDiag();
+  $('#dl-refresh').onclick = async () => {
+    dlState.level = dlState.level || null;
+    body.innerHTML = '<p class="muted">正在刷新目录…</p>';
+    await window.BBCNet.fetchCatalog();
+    renderDownload();
+  };
 
   if (!dlState.level) { body.innerHTML = '<p class="muted">选择一个栏目开始。</p>'; return; }
   if (!cat) { body.innerHTML = '<p class="muted">正在加载目录…</p>'; window.BBCNet.fetchCatalog().then(renderDownload); return; }
+
+  // 上次成功、这次没抓到：保留旧数据并说明原因
+  const stale = cat.stale
+    ? '<div class="banner">这次刷新没抓到最新目录，先显示上次成功获取的内容。' +
+      (hintForNetError(cat.lastError) ? '<div class="small" style="margin-top:.4rem">' + escapeHtml(hintForNetError(cat.lastError)) + '</div>' : '') +
+      '</div>'
+    : '';
+
   const course = cat.courses.find((c) => c.id === dlState.level);
-  if (!course) { body.innerHTML = '<p class="muted">该栏目暂无内容。</p>'; return; }
-  if (!course.series.length) { body.innerHTML = `<p class="muted">没有解析到系列（${course.error || '未知错误'}）。</p>`; return; }
+  if (!course) { body.innerHTML = stale + '<p class="muted">该栏目暂无内容。</p>'; return; }
+  if (!course.series.length) {
+    const hint = hintForNetError(course.error);
+    body.innerHTML =
+      stale +
+      '<div class="banner">没有解析到系列：' + escapeHtml(course.error || '未知错误') + '</div>' +
+      (hint ? '<div class="summary"><div class="small">' + escapeHtml(hint) + '</div></div>' : '') +
+      '<div class="tool-row"><button class="chip" id="dl-check2">网络自检</button><button class="chip" id="dl-retry2">重试</button></div>';
+    const b1 = $('#dl-check2');
+    if (b1) b1.onclick = () => runDiag();
+    const b2 = $('#dl-retry2');
+    if (b2) b2.onclick = async () => {
+      body.innerHTML = '<p class="muted">正在重新抓取…</p>';
+      await window.BBCNet.fetchCatalog();
+      renderDownload();
+    };
+    return;
+  }
 
   body.innerHTML =
+    stale +
     '<div class="grid">' +
     course.series
       .map((s) => `<div class="card" data-series="${encodeURIComponent(s.id)}"><div class="t">${escapeHtml(s.title)}</div><div class="m">${escapeHtml(s.url)}</div></div>`)
@@ -561,7 +640,18 @@ async function openDlSeries(seriesId) {
   const series = course.series.find((s) => s.id === seriesId);
   let data;
   try { data = await window.BBCNet.fetchSeries(series); }
-  catch (e) { body.innerHTML = `<div class="banner">获取失败：${escapeHtml(e.message || e)}</div>`; return; }
+  catch (e) {
+    const hint = hintForNetError(e.message || e);
+    body.innerHTML =
+      `<div class="banner">获取失败：${escapeHtml(e.message || e)}</div>` +
+      (hint ? `<div class="summary"><div class="small">${escapeHtml(hint)}</div></div>` : '') +
+      '<div class="tool-row"><button class="chip" id="dl-check3">网络自检</button><button class="chip" id="dl-back2">返回</button></div>';
+    const b1 = $('#dl-check3');
+    if (b1) b1.onclick = () => runDiag();
+    const b2 = $('#dl-back2');
+    if (b2) b2.onclick = () => renderDownload();
+    return;
+  }
   dlState.series = data;
   renderDlEpisodes();
 }
@@ -619,7 +709,8 @@ async function downloadOne(s, i) {
     if (p2) p2.textContent = `已下载：${r.ep.title}`;
   } catch (err) {
     if (btn) { btn.disabled = false; btn.textContent = '重试'; }
-    if (prog) prog.textContent = `下载失败：${err.message || err}`;
+    const hint = hintForNetError(err.message || err);
+    if (prog) prog.textContent = `下载失败：${err.message || err}` + (hint ? `　${hint}` : '');
   }
 }
 
