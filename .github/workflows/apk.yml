@@ -81,19 +81,59 @@ jobs:
           chmod +x gradlew
           ./gradlew --no-daemon assembleDebug
 
-      - name: 重命名 APK
+      # 便于排查“装不上”：把最终的 minSdk / targetSdk 打进日志
+      - name: 打印 SDK 版本
+        run: |
+          MAN=$(find android/app/build/intermediates -name AndroidManifest.xml -path '*merged*' | head -1)
+          echo "merged manifest: $MAN"
+          grep -o 'android:minSdkVersion="[0-9]*"\|android:targetSdkVersion="[0-9]*"' "$MAN" || true
+
+      # AGP 在 minSdk>=24 时默认只做 v2 签名，不生成 v1（JAR）签名。
+      # 部分国产 ROM 的安装器（MIUI 等）只认 v1，会报
+      # “解析软件包时出现问题 (33) / packageInfo is null”。
+      # 这里用 apksigner 重签为 v1+v2+v3，兼容性最好。
+      - name: 重新签名（v1 + v2 + v3）
+        run: |
+          BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          echo "build-tools: $BT"
+          KS="$HOME/ci-debug.keystore"
+          rm -f "$KS"
+          keytool -genkeypair -keystore "$KS" -storepass android -keypass android \
+            -alias androiddebugkey -dname "CN=Android Debug,O=Android,C=US" \
+            -keyalg RSA -keysize 2048 -validity 10000 >/dev/null 2>&1
+
+          APK=android/app/build/outputs/apk/debug/app-debug.apk
+          "$BT/zipalign" -p -f 4 "$APK" android/app/build/outputs/apk/debug/aligned.apk
+          "$BT/apksigner" sign \
+            --ks "$KS" --ks-pass pass:android --key-pass pass:android \
+            --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true \
+            --out android/app/build/outputs/apk/debug/signed.apk \
+            android/app/build/outputs/apk/debug/aligned.apk
+
+          "$BT/apksigner" verify --print-certs android/app/build/outputs/apk/debug/signed.apk | head -6
+          echo "---- v1 签名文件 ----"
+          unzip -l android/app/build/outputs/apk/debug/signed.apk | grep -E 'META-INF/(CERT|ANDROIDD)\.' || echo "警告：没有 v1 签名文件"
+
+      - name: 重命名并生成校验和
         run: |
           mkdir -p out
-          cp android/app/build/outputs/apk/debug/app-debug.apk "out/bbc-learning-english-${GITHUB_REF_NAME}.apk"
+          cp android/app/build/outputs/apk/debug/signed.apk "out/bbc-learning-english-${GITHUB_REF_NAME}.apk"
+          cd out
+          sha256sum *.apk | tee sha256sum.txt
+          ls -l
 
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
         with:
           name: apk
-          path: out/*.apk
+          path: |
+            out/*.apk
+            out/sha256sum.txt
 
       - name: 挂到 Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: out/*.apk
+          files: |
+            out/*.apk
+            out/sha256sum.txt
