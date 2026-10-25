@@ -4,10 +4,11 @@ apply plugin: 'com.android.library'
 
 android {
     namespace "com.kuanbandu.httpbridge"
-    compileSdkVersion 35
+    // 必须与主工程一致：androidx.core 1.17+ 要求 compileSdk >= 36
+    compileSdkVersion 36
     defaultConfig {
         minSdkVersion 22
-        targetSdkVersion 35
+        targetSdkVersion 36
     }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
