@@ -185,13 +185,17 @@ async function fetchEpisode(ep) {
       date: p.date || ep.date,
       audioUrl: p.audioUrl || ep.audioUrl,
       videoUrl: p.videoUrl || ep.videoUrl || null,
+      videoKind: p.videoKind || ep.videoKind || null,
       transcript: p.transcript || [],
       transcriptFile: p.transcriptFile || null,
     };
   } catch (e) {
-    return { ...ep, videoUrl: ep.videoUrl || null, fetchError: String(e.message || e) };
+    return { ...ep, videoUrl: ep.videoUrl || null, videoKind: ep.videoKind || null, fetchError: String(e.message || e) };
   }
 }
+
+// HLS（m3u8）流只能由原生层处理：它要按序拉分片、解密并合并
+const isHlsUrl = (u) => /\.m3u8(\?|#|$)/i.test(u || '');
 
 /* ---------------- 下载 ---------------- */
 function abToB64(buf) {
@@ -215,6 +219,27 @@ function b64ToBytes(b64) {
 // （BBC 有不少老资源是 http://，安卓 9+ 默认拦截明文 HTTP）
 // onProgress(loaded, total)：total 为 -1 表示服务器没给长度
 let _pidSeq = 0;
+
+// 在执行 fn 期间监听某个 progressId 的原生进度事件（结束后自动解绑）
+async function withProgress(http, pid, cb, fn) {
+  let listener = null;
+  if (pid && typeof http.addListener === 'function') {
+    try {
+      listener = await http.addListener('downloadProgress', (d) => {
+        if (!d || d.id !== pid) return;
+        try { cb(d); } catch { /* 忽略 */ }
+      });
+    } catch { listener = null; }
+  }
+  try {
+    return await fn();
+  } finally {
+    if (listener && typeof listener.remove === 'function') {
+      try { await listener.remove(); } catch { /* 忽略 */ }
+    }
+  }
+}
+
 async function getBinary(http, url, headers, onProgress) {
   const pid = onProgress ? `dl${++_pidSeq}_${Date.now()}` : null;
   let listener = null;
@@ -293,16 +318,52 @@ async function downloadEpisode(ep, onProgress) {
     localPath = p;
   }
 
-  let videoError = null;
+  // 视频状态：none（本集无视频）/ ok / unsupported（格式暂不支持）/ error（下载失败）
+  let videoState = full.videoUrl ? 'pending' : 'none';
+  let videoReason = '';
+  let videoFormat = null;
+  let videoSegments = 0;
+
   if (full.videoUrl) {
+    const kind = full.videoKind || (isHlsUrl(full.videoUrl) ? 'hls' : 'mp4');
     try {
-      const { res } = await getBinary(http, full.videoUrl, null, report('video'));
-      const b64 = typeof res.data === 'string' ? res.data : abToB64(res.data);
-      const p = `${dir}/${base}.mp4`;
-      await fs.writeFile({ path: p, data: b64, directory: 'DATA', recursive: true });
-      localVideoPath = p;
+      if (kind === 'hls') {
+        if (typeof http.hls !== 'function') {
+          throw new Error('UNSUPPORTED:当前 App 版本还不支持 HLS 视频，请更新到最新版');
+        }
+        const pid = `hls${++_pidSeq}_${Date.now()}`;
+        const r = await withProgress(http, pid, (d) => {
+          if (!onProgress || d.kind !== 'segment') return;
+          onProgress({ phase: 'video', segment: d.loaded, segments: d.total, bytes: d.bytes });
+        }, () => http.hls({
+          url: full.videoUrl,
+          path: `${dir}/${base}.mp4`,
+          progressId: pid,
+          connectTimeout: 30000,
+          readTimeout: 90000,
+          maxHeight: 720,
+        }));
+        localVideoPath = (r && r.path) || `${dir}/${base}.mp4`;
+        videoFormat = (r && r.format) || 'mp4';
+        videoSegments = Number((r && r.segments) || 0);
+      } else {
+        const { res } = await getBinary(http, full.videoUrl, null, report('video'));
+        const b64 = typeof res.data === 'string' ? res.data : abToB64(res.data);
+        const p = `${dir}/${base}.mp4`;
+        await fs.writeFile({ path: p, data: b64, directory: 'DATA', recursive: true });
+        localVideoPath = p;
+        videoFormat = 'mp4';
+      }
+      videoState = 'ok';
     } catch (e) {
-      videoError = String(e.message || e);
+      const msg = String(e.message || e);
+      if (/^UNSUPPORTED:/.test(msg)) {
+        videoState = 'unsupported';
+        videoReason = msg.replace(/^UNSUPPORTED:/, '');
+      } else {
+        videoState = 'error';
+        videoReason = msg;
+      }
     }
   }
 
@@ -315,10 +376,14 @@ async function downloadEpisode(ep, onProgress) {
     url: full.url,
     audioUrl: full.audioUrl || null,
     videoUrl: full.videoUrl || null,
+    videoKind: full.videoKind || null,
     transcript: full.transcript || [],
     localPath,
     localVideoPath,
-    videoError,
+    videoState,
+    videoReason,
+    videoFormat,
+    videoSegments,
     hasVideo: !!(localVideoPath || full.videoUrl),
     level: full.level,
     at: Date.now(),

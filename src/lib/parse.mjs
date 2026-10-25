@@ -270,6 +270,7 @@ export async function parseEpisodePage(http, rawHtml, base) {
     audioUrl: audio?.url || null,
     audioHow: audio?.how || null,
     videoUrl: video?.url || null,
+    videoKind: video?.kind || null,
     videoHow: video?.how || null,
     transcript: extractTranscript(html),
     transcriptFile: pdfAnchor?.href || null,

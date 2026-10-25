@@ -145,6 +145,8 @@ function addLocalEpisode(ep) {
       transcript: ep.transcript,
       localPath: ep.localPath || null,
       localVideoPath: ep.localVideoPath || null,
+      videoState: ep.videoState || null,
+      videoReason: ep.videoReason || '',
     });
   }
 }
@@ -248,13 +250,21 @@ async function openEpisode(i) {
   curEp = curSeries.episodes[i];
   curEp.__index = i;
   $('#pl-title').textContent = curEp.title || curEp.id || 'Untitled';
+  const vidBad = !curEp.localVideoPath && (curEp.videoState === 'unsupported' || curEp.videoState === 'error');
   $('#pl-meta').textContent = [
     curEp.date,
-    hasVideo(curEp) ? '视频' : '',
+    curEp.localVideoPath ? '视频' : (vidBad ? '视频不可用' : (hasVideo(curEp) ? '视频' : '')),
     curEp.duration ? fmtTime(curEp.duration) : '',
     curEp.audioBytes ? `${(curEp.audioBytes / 1048576).toFixed(1)}MB` : '',
   ].filter(Boolean).join(' · ');
   $('#pl-errmsg').hidden = true;
+  if (vidBad) {
+    showPlMsg(
+      curEp.videoState === 'unsupported'
+        ? `该节目视频格式暂不支持（${curEp.videoReason || '未知原因'}），已按音频播放。`
+        : `视频下载失败（${curEp.videoReason || '未知原因'}），已按音频播放。`
+    );
+  }
   loopA = loopB = null;
   updateAbInfo();
 
@@ -269,8 +279,11 @@ async function openEpisode(i) {
   try {
     await loadMedia(curEp);
   } catch (err) {
-    $('#pl-errmsg').hidden = false;
-    $('#pl-errmsg').textContent = `加载失败：${err.message}`;
+    const el = $('#pl-errmsg');
+    // 上面已经说过“视频格式暂不支持”这类更具体的原因，就别拿加载失败盖掉它
+    if (el && !el.hidden) return;
+    el.hidden = false;
+    el.textContent = `加载失败：${err.message}`;
   }
 }
 
@@ -283,6 +296,36 @@ async function fetchAudioBlobWeb(url) {
 
 const hasVideo = (e) => !!(e && (e.videoFile || e.localVideoPath || e.videoUrl));
 
+// 播放页顶部那条提示：视频为什么用不了，必须说出来，不能静默换成音频
+function showPlMsg(msg) {
+  const el = $('#pl-errmsg');
+  if (!el) return;
+  el.hidden = false;
+  el.textContent = msg;
+}
+
+// 视频为什么没拿到，要说清楚：BBC 没提供 ≠ 我们处理不了
+function videoStatus(st) {
+  if (!st) return { text: '', tone: 'none' };
+  if (st.localVideoPath) return { text: '含视频', tone: 'ok' };
+  if (!st.videoUrl) return { text: '仅音频：BBC 本集没有提供视频', tone: 'none' };
+  if (st.videoState === 'unsupported') {
+    return { text: `仅音频：该节目视频格式暂不支持（${st.videoReason || '未知原因'}）`, tone: 'bad' };
+  }
+  if (st.videoState === 'error') {
+    return { text: `仅音频：视频下载失败（${st.videoReason || '未知原因'}）`, tone: 'bad' };
+  }
+  return { text: '仅音频：视频没存下来', tone: 'bad' };
+}
+
+function videoTag(st) {
+  if (!st) return '';
+  if (st.localVideoPath) return '含视频';
+  if (st.videoState === 'unsupported') return '仅音频·格式不支持';
+  const v = videoStatus(st);
+  return v.tone === 'bad' ? '仅音频·视频没下来' : '仅音频';
+}
+
 async function loadMedia(e) {
   const net = window.BBCNet;
   const native = !!(net && net.isNative && net.isNative());
@@ -291,18 +334,28 @@ async function loadMedia(e) {
 
   // 1) 有视频就优先播视频（本地文件优先，其次远程直链）
   if (hasVideo(e)) {
-    let vsrc = null;
-    if (e.localVideoPath && native) {
-      try { vsrc = await net.localSrc(e.localVideoPath); } catch (err) { console.warn('本地视频解析失败', err); }
-    }
-    if (!vsrc && e.videoFile) vsrc = `content/${e.videoFile}`;
-    if (!vsrc && e.videoUrl) vsrc = net && net.secureUrl ? net.secureUrl(e.videoUrl) : e.videoUrl;
-    if (vsrc && videoEl) {
-      useVideo();
-      videoEl.src = vsrc;
-      videoEl.load();
-      resetProgressUI(e);
-      return;
+    const local = !!(e.localVideoPath || e.videoFile);
+    // 在线 HLS：WebView 基本放不了 m3u8，别让人对着黑屏干等，直接说清楚改用音频
+    if (!local && /\.m3u8(\?|#|$)/i.test(e.videoUrl || '')) {
+      // 如果页面顶部已经写了更具体的原因（例如加密方式不支持），就别覆盖
+      const el0 = $('#pl-errmsg');
+      if (!el0 || el0.hidden) {
+        showPlMsg('该节目视频是 HLS 流，在线不能直接播放；下载后可在播放页观看。');
+      }
+    } else {
+      let vsrc = null;
+      if (e.localVideoPath && native) {
+        try { vsrc = await net.localSrc(e.localVideoPath); } catch (err) { console.warn('本地视频解析失败', err); }
+      }
+      if (!vsrc && e.videoFile) vsrc = `content/${e.videoFile}`;
+      if (!vsrc && e.videoUrl) vsrc = net && net.secureUrl ? net.secureUrl(e.videoUrl) : e.videoUrl;
+      if (vsrc && videoEl) {
+        useVideo();
+        videoEl.src = vsrc;
+        videoEl.load();
+        resetProgressUI(e);
+        return;
+      }
     }
   }
 
@@ -509,13 +562,16 @@ if (videoEl) {
   videoEl.addEventListener('error', () => {
     if (videoEl !== player || !curEp) return;
     const hasAudio = !!(curEp.audioUrl || curEp.localPath || curEp.audioFile);
+    const isHls = /\.m3u8(\?|#|$)/i.test(curEp.videoUrl || '');
     if (!hasAudio) {
-      $('#pl-errmsg').hidden = false;
-      $('#pl-errmsg').textContent = '视频加载失败：直链可能已失效或被限制。';
+      showPlMsg(isHls
+        ? '该节目视频格式暂不支持（HLS 流无法直接播放），且本集没有可用音频。'
+        : '视频加载失败：直链可能已失效或被限制。');
       return;
     }
-    $('#pl-errmsg').hidden = false;
-    $('#pl-errmsg').textContent = '视频加载失败，已自动切换为音频。';
+    showPlMsg(isHls
+      ? '该节目视频格式暂不支持（HLS 流无法直接播放），已自动切换为音频。'
+      : '视频加载失败，已自动切换为音频。');
     loadMedia({ ...curEp, videoUrl: null, localVideoPath: null, videoFile: null }).catch(() => {});
   });
 }
@@ -847,7 +903,7 @@ function renderDlEpisodes() {
     s.episodes
       .map((e, i) => {
         const st = window.BBCNet.getStored(s.id, e.id);
-        const media = st ? (st.localVideoPath ? '含视频' : (st.videoUrl ? '视频未下载' : '仅音频')) : '';
+        const media = st ? videoTag(st) : '';
         const actions = st
           ? `<button class="chip dl-play" data-i="${i}">播放</button><button class="chip ghost dl-del" data-i="${i}">删除</button>`
           : `<button class="chip dl-btn" data-i="${i}">下载</button>`;
@@ -885,23 +941,27 @@ async function downloadOne(s, i) {
   if (btn) { btn.disabled = true; btn.textContent = '准备…'; }
   if (row) { row.classList.add('downloading'); row.style.setProperty('--p', '3%'); }
   try {
-    const r = await window.BBCNet.downloadEpisode(e, ({ phase, loaded, total }) => {
-      const pct = total > 0 ? Math.min(99, Math.round((loaded / total) * 100)) : 0;
+    const r = await window.BBCNet.downloadEpisode(e, (p) => {
+      // HLS 按分片报进度，普通文件按字节报百分比
+      const pct = p.segments
+        ? Math.min(99, Math.round((p.segment / p.segments) * 100))
+        : (p.total > 0 ? Math.min(99, Math.round((p.loaded / p.total) * 100)) : 0);
+      const text = p.segments ? `${p.segment}/${p.segments} 段` : (p.total > 0 ? `${pct}%` : fmtSize(p.loaded));
       if (row) row.style.setProperty('--p', `${pct || 3}%`);
-      const text = total > 0 ? `${pct}%` : fmtSize(loaded);
-      if (btn) btn.textContent = (phase === 'video' ? '视频 ' : '') + text;
+      if (btn) btn.textContent = (p.phase === 'video' ? '视频 ' : '') + text;
       const prefix = dlBatch ? `[${dlBatch.done + 1}/${dlBatch.total}] ` : '';
-      if (prog) prog.textContent = `${prefix}${phase === 'video' ? '正在下载视频' : '正在下载音频'} ${text}`;
+      if (prog) prog.textContent = `${prefix}${p.phase === 'video' ? '正在下载视频' : '正在下载音频'} ${text}`;
     });
     addLocalEpisode(r.ep);
     if (row) row.classList.remove('downloading');
     renderDlEpisodes();
     const p2 = $('#dl-progress');
     if (p2) {
-      let extra = '（本集 BBC 未提供视频）';
-      if (r.ep.localVideoPath) extra = '（音频 + 视频）';
-      else if (r.ep.videoUrl) extra = '（视频下载失败，音频已存）';
-      p2.textContent = `已下载：${r.ep.title}${extra}`;
+      // 视频为什么没拿到，直接说清楚，不要让人以为漏了功能
+      const vs = videoStatus(r.ep);
+      p2.textContent = r.ep.localVideoPath
+        ? `已下载：${r.ep.title}（音频 + 视频）`
+        : `已下载：${r.ep.title}　${vs.text}`;
     }
   } catch (err) {
     if (btn) { btn.disabled = false; btn.textContent = '重试'; }
