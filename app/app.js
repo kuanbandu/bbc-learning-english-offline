@@ -15,8 +15,22 @@ let curSeries = null;
 let curEp = null;
 let audioObjUrl = null;
 
-const player = new Audio();
-player.preload = 'auto';
+const audioEl = new Audio();
+audioEl.preload = 'auto';
+const videoEl = document.getElementById('pl-video');
+// 当前活跃的媒体元素：有视频用 <video>，没有用 <audio>，两者共用同一套控件
+let player = audioEl;
+
+function useAudio() {
+  if (player !== audioEl) { try { videoEl && videoEl.pause(); } catch { /* 忽略 */ } }
+  player = audioEl;
+  if (videoEl) videoEl.hidden = true;
+}
+function useVideo() {
+  if (player !== videoEl) { try { audioEl.pause(); } catch { /* 忽略 */ } }
+  player = videoEl;
+  if (videoEl) videoEl.hidden = false;
+}
 
 let loopA = null, loopB = null, sleepTimer = null, follow = false;
 const SPEEDS = [0.6, 0.8, 1.0, 1.25, 1.5, 2.0];
@@ -88,7 +102,7 @@ function mergeLibrary() {
   libMerged = true;
   if (!window.BBCNet || !DATA || !Array.isArray(DATA.courses)) return;
   const lib = window.BBCNet.getLibrary();
-  for (const ep of Object.values(lib.episodes || {})) if (ep.localPath) addLocalEpisode(ep);
+  for (const ep of Object.values(lib.episodes || {})) if (ep.localPath || ep.localVideoPath) addLocalEpisode(ep);
 }
 function ensureLocalCourse() {
   let c = DATA.courses.find((x) => x.id === 'local');
@@ -100,7 +114,13 @@ function addLocalEpisode(ep) {
   let s = c.series.find((x) => x.id === ep.seriesId);
   if (!s) { s = { id: ep.seriesId, title: ep.seriesTitle || ep.seriesId, level: '已下载', episodes: [] }; c.series.push(s); }
   if (!s.episodes.some((x) => x.id === ep.id)) {
-    s.episodes.push({ id: ep.id, title: ep.title, date: ep.date, url: ep.url, audioUrl: ep.audioUrl, transcript: ep.transcript, localPath: ep.localPath });
+    s.episodes.push({
+      id: ep.id, title: ep.title, date: ep.date, url: ep.url,
+      audioUrl: ep.audioUrl, videoUrl: ep.videoUrl || null,
+      transcript: ep.transcript,
+      localPath: ep.localPath || null,
+      localVideoPath: ep.localVideoPath || null,
+    });
   }
 }
 
@@ -178,14 +198,15 @@ function openSeries(id) {
   $('#episode-list').innerHTML = (curSeries.episodes || [])
     .map((e, i) => {
       const p = progress[epKey(curSeries, e)];
-      const has = !!e.audioFile;
+      const has = !!(e.audioFile || e.localPath);
       const pct = p && p.dur ? Math.min(100, Math.round((p.pos / p.dur) * 100)) : 0;
+      const vid = hasVideo(e) ? ' · 视频' : '';
       return `<div class="row" data-i="${i}">
         <div class="ep">
           <div class="n">${i + 1}</div>
           <div class="body">
             <div class="t">${escapeHtml(e.title || e.id || 'Untitled')}</div>
-            <div class="m">${escapeHtml(e.date || '')}${e.duration ? ` · ${fmtTime(e.duration)}` : ''}${pct ? ` · 已听 ${pct}%` : ''}</div>
+            <div class="m">${escapeHtml(e.date || '')}${e.duration ? ` · ${fmtTime(e.duration)}` : ''}${vid}${pct ? ` · 已听 ${pct}%` : ''}</div>
           </div>
           <div class="dot ${has ? 'ok' : ''}">${has ? '离线' : '在线'}</div>
         </div>
@@ -202,7 +223,12 @@ async function openEpisode(i) {
   curEp = curSeries.episodes[i];
   curEp.__index = i;
   $('#pl-title').textContent = curEp.title || curEp.id || 'Untitled';
-  $('#pl-meta').textContent = [curEp.date, curEp.duration ? fmtTime(curEp.duration) : '', curEp.audioBytes ? `${(curEp.audioBytes / 1048576).toFixed(1)}MB` : ''].filter(Boolean).join(' · ');
+  $('#pl-meta').textContent = [
+    curEp.date,
+    hasVideo(curEp) ? '视频' : '',
+    curEp.duration ? fmtTime(curEp.duration) : '',
+    curEp.audioBytes ? `${(curEp.audioBytes / 1048576).toFixed(1)}MB` : '',
+  ].filter(Boolean).join(' · ');
   $('#pl-errmsg').hidden = true;
   loopA = loopB = null;
   updateAbInfo();
@@ -216,10 +242,10 @@ async function openEpisode(i) {
   show('player');
 
   try {
-    await loadAudio(curEp);
+    await loadMedia(curEp);
   } catch (err) {
     $('#pl-errmsg').hidden = false;
-    $('#pl-errmsg').textContent = `音频加载失败：${err.message}。若显示“在线”，说明这台设备连不上 BBC，请在能联网的环境重新运行 npm run download。`;
+    $('#pl-errmsg').textContent = `加载失败：${err.message}`;
   }
 }
 
@@ -230,9 +256,33 @@ async function fetchAudioBlobWeb(url) {
   return await res.blob();
 }
 
-async function loadAudio(e) {
+const hasVideo = (e) => !!(e && (e.videoFile || e.localVideoPath || e.videoUrl));
+
+async function loadMedia(e) {
   const net = window.BBCNet;
   const native = !!(net && net.isNative && net.isNative());
+  try { audioEl.pause(); } catch { /* 忽略 */ }
+  if (videoEl) { try { videoEl.pause(); } catch { /* 忽略 */ } }
+
+  // 1) 有视频就优先播视频（本地文件优先，其次远程直链）
+  if (hasVideo(e)) {
+    let vsrc = null;
+    if (e.localVideoPath && native) {
+      try { vsrc = await net.localSrc(e.localVideoPath); } catch (err) { console.warn('本地视频解析失败', err); }
+    }
+    if (!vsrc && e.videoFile) vsrc = `content/${e.videoFile}`;
+    if (!vsrc && e.videoUrl) vsrc = net && net.secureUrl ? net.secureUrl(e.videoUrl) : e.videoUrl;
+    if (vsrc && videoEl) {
+      useVideo();
+      videoEl.src = vsrc;
+      videoEl.load();
+      resetProgressUI(e);
+      return;
+    }
+  }
+
+  // 2) 音频
+  useAudio();
   let src = null;
   // 已下载到手机本地的音频：用原生文件地址直接播放（离线可用）
   if (e.localPath && native) {
@@ -247,9 +297,12 @@ async function loadAudio(e) {
     audioObjUrl = URL.createObjectURL(blob);
     src = audioObjUrl;
   }
-  player.src = src;
-  player.load();
+  audioEl.src = src;
+  audioEl.load();
+  resetProgressUI(e);
+}
 
+function resetProgressUI(e) {
   const p = LS.get(KEY_PROGRESS, {})[epKey(curSeries, e)];
   const resume = p && p.pos > 1 && p.pos < (p.dur || Infinity) - 2 ? p.pos : 0;
   if (resume) {
@@ -339,18 +392,50 @@ let seeking = false;
 seek.oninput = () => { seeking = true; $('#pl-cur').textContent = fmtTime((seek.value / 1000) * (player.duration || 0)); };
 seek.onchange = () => { if (player.duration) player.currentTime = (seek.value / 1000) * player.duration; seeking = false; };
 
-player.addEventListener('timeupdate', () => {
-  if (!player.duration || seeking) return;
-  seek.value = Math.round((player.currentTime / player.duration) * 1000);
-  $('#pl-cur').textContent = fmtTime(player.currentTime);
-  if (loopB !== null && player.currentTime >= loopB && loopA !== null) player.currentTime = loopA;
-  if (follow) autoFollow();
-  saveProgress();
-});
-player.addEventListener('loadedmetadata', () => { $('#pl-dur').textContent = fmtTime(player.duration); });
-player.addEventListener('play', () => ($('#btn-play').textContent = '❙❙'));
-player.addEventListener('pause', () => { $('#btn-play').textContent = '▶'; saveProgress(); });
-player.addEventListener('ended', () => { saveProgress(true); autoNext(); });
+function bindMedia(el) {
+  el.addEventListener('timeupdate', () => {
+    if (el !== player || !player.duration || seeking) return;
+    seek.value = Math.round((player.currentTime / player.duration) * 1000);
+    $('#pl-cur').textContent = fmtTime(player.currentTime);
+    if (loopB !== null && player.currentTime >= loopB && loopA !== null) player.currentTime = loopA;
+    if (follow) autoFollow();
+    saveProgress();
+  });
+  el.addEventListener('loadedmetadata', () => {
+    if (el === player) $('#pl-dur').textContent = fmtTime(player.duration);
+  });
+  el.addEventListener('play', () => {
+    if (el === player) $('#btn-play').textContent = '❙❙';
+  });
+  el.addEventListener('pause', () => {
+    if (el !== player) return;
+    $('#btn-play').textContent = '▶';
+    saveProgress();
+  });
+  el.addEventListener('ended', () => {
+    if (el !== player) return;
+    saveProgress(true);
+    autoNext();
+  });
+}
+bindMedia(audioEl);
+
+if (videoEl) {
+  bindMedia(videoEl);
+  // 视频直链失效（403/过期）时自动退回音频，别让用户卡住
+  videoEl.addEventListener('error', () => {
+    if (videoEl !== player || !curEp) return;
+    const hasAudio = !!(curEp.audioUrl || curEp.localPath || curEp.audioFile);
+    if (!hasAudio) {
+      $('#pl-errmsg').hidden = false;
+      $('#pl-errmsg').textContent = '视频加载失败：直链可能已失效或被限制。';
+      return;
+    }
+    $('#pl-errmsg').hidden = false;
+    $('#pl-errmsg').textContent = '视频加载失败，已自动切换为音频。';
+    loadMedia({ ...curEp, videoUrl: null, localVideoPath: null, videoFile: null }).catch(() => {});
+  });
+}
 
 let lastSave = 0;
 function saveProgress(done = false) {
@@ -517,6 +602,9 @@ function hintForNetError(msg) {
   }
   if (/timed out|timeout|Read timed out/i.test(s)) {
     return '连接超时。检查代理节点是否可用，或换一个网络（Wi-Fi / 移动数据）再试。';
+  }
+  if (/Cleartext|not permitted/i.test(s)) {
+    return '这一集用的是 http 明文链接，被安卓系统拦下了。新版已改成 https 优先并放开明文访问，更新到最新版即可。';
   }
   if (/SSL|Certificate|handshake|CertPathValidator/i.test(s)) {
     return 'TLS 握手失败，可能被代理的证书拦截了。关掉代理的 HTTPS 解密（MITM）后重试。';
@@ -702,11 +790,14 @@ async function downloadOne(s, i) {
   if (btn) { btn.disabled = true; btn.textContent = '下载中…'; }
   const prog = $('#dl-progress');
   try {
-    const r = await window.BBCNet.downloadAudio(e);
+    const r = await window.BBCNet.downloadEpisode(e);
     addLocalEpisode(r.ep);
     renderDlEpisodes();
     const p2 = $('#dl-progress');
-    if (p2) p2.textContent = `已下载：${r.ep.title}`;
+    if (p2) {
+      const extra = r.ep.localVideoPath ? '（视频 + 音频）' : (r.ep.videoError ? '（只有音频，视频没下来）' : '');
+      p2.textContent = `已下载：${r.ep.title}${extra}`;
+    }
   } catch (err) {
     if (btn) { btn.disabled = false; btn.textContent = '重试'; }
     const hint = hintForNetError(err.message || err);

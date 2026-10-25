@@ -59,6 +59,9 @@ const ENTRY_URLS = [
 
 const safeName = (s) => String(s || 'x').replace(/[^a-zA-Z0-9_-]+/g, '_').slice(0, 60);
 
+// http:// → https://（BBC 部分老资源仍是明文链接，安卓默认拦截明文 HTTP）
+const secureUrl = (u) => (typeof u === 'string' && /^http:/i.test(u) ? u.replace(/^http:/i, 'https:') : u);
+
 /* ---------------- HTTP 适配层：给解析器用的 getText ---------------- */
 async function getText(url) {
   const http = getHttp();
@@ -169,9 +172,10 @@ async function fetchSeries(series) {
   };
 }
 
-// 单集：音频地址或文稿缺失时，抓单集页补全
+// 单集：音频 / 视频 / 文稿缺失时，抓单集页补全
 async function fetchEpisode(ep) {
-  if (ep.audioUrl && Array.isArray(ep.transcript) && ep.transcript.length) return ep;
+  const complete = ep.audioUrl && Array.isArray(ep.transcript) && ep.transcript.length && ep.videoUrl !== undefined;
+  if (complete) return ep;
   try {
     const html = await getText(ep.url);
     const p = await parseEpisodePage(httpAdapter, html, ep.url);
@@ -180,11 +184,12 @@ async function fetchEpisode(ep) {
       title: p.title || ep.title,
       date: p.date || ep.date,
       audioUrl: p.audioUrl || ep.audioUrl,
+      videoUrl: p.videoUrl || ep.videoUrl || null,
       transcript: p.transcript || [],
       transcriptFile: p.transcriptFile || null,
     };
   } catch (e) {
-    return { ...ep, fetchError: String(e.message || e) };
+    return { ...ep, videoUrl: ep.videoUrl || null, fetchError: String(e.message || e) };
   }
 }
 
@@ -206,37 +211,75 @@ function b64ToBytes(b64) {
   return out;
 }
 
+// 下载/播放二进制：优先 https，失败再退回原始 http
+// （BBC 有不少老资源是 http://，安卓 9+ 默认拦截明文 HTTP）
+async function getBinary(http, url, headers) {
+  const list = /^http:/i.test(url) ? [url.replace(/^http:/i, 'https:'), url] : [url];
+  let lastErr = null;
+  for (const u of list) {
+    try {
+      const r = await http.get({
+        url: u,
+        headers: { 'User-Agent': UA, Accept: '*/*', ...(headers || {}) },
+        responseType: 'arraybuffer',
+        connectTimeout: 25000,
+        readTimeout: 300000,
+      });
+      if (r.status && r.status >= 400) throw new Error('HTTP ' + r.status);
+      return { url: u, res: r };
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw lastErr || new Error('下载失败');
+}
+
 // 在线播放用：把远程音频拉成 Blob（App 内走原生请求，绕过 CORS）
 async function fetchAudioBlob(url) {
   const http = getHttp();
   if (!http) throw new Error('当前环境不支持原生网络请求（请用安卓 App 打开）');
-  const r = await http.get({
-    url,
-    headers: { 'User-Agent': UA, Accept: '*/*' },
-    responseType: 'arraybuffer',
-  });
-  if (r.status && r.status >= 400) throw new Error('HTTP ' + r.status);
-  const b64 = typeof r.data === 'string' ? r.data : abToB64(r.data);
+  const { res } = await getBinary(http, url);
+  const b64 = typeof res.data === 'string' ? res.data : abToB64(res.data);
   return new Blob([b64ToBytes(b64)], { type: 'audio/mpeg' });
 }
 
-// 返回 { ok, ep } 或抛错
-async function downloadAudio(ep) {
+// 返回 { ok, ep } 或抛错。有视频时把 mp4 一起存下来（视频失败不影响音频）
+async function downloadEpisode(ep) {
   const http = getHttp();
   const fs = getFS();
   if (!http) throw new Error('当前环境不支持原生网络请求（请用安卓 App 打开）');
   if (!fs) throw new Error('当前环境不支持本地存储');
+
   const full = await fetchEpisode(ep);
-  if (!full.audioUrl) throw new Error('本集没有可下载的音频地址');
-  const res = await http.get({
-    url: full.audioUrl,
-    headers: { 'User-Agent': UA, Accept: '*/*' },
-    responseType: 'arraybuffer',
-  });
-  if (res.status && res.status >= 400) throw new Error('音频下载失败 HTTP ' + res.status);
-  const b64 = typeof res.data === 'string' ? res.data : abToB64(res.data);
-  const path = `downloads/${safeName(full.seriesId)}/${safeName(full.id)}.mp3`;
-  await fs.writeFile({ path, data: b64, directory: 'DATA', recursive: true });
+  if (!full.audioUrl && !full.videoUrl) {
+    throw new Error(full.fetchError ? `抓取单集页失败：${full.fetchError}` : '本集没有可下载的音频或视频地址');
+  }
+
+  const dir = `downloads/${safeName(full.seriesId)}`;
+  const base = safeName(full.id);
+  let localPath = null;
+  let localVideoPath = null;
+
+  if (full.audioUrl) {
+    const { res } = await getBinary(http, full.audioUrl);
+    const b64 = typeof res.data === 'string' ? res.data : abToB64(res.data);
+    const p = `${dir}/${base}.mp3`;
+    await fs.writeFile({ path: p, data: b64, directory: 'DATA', recursive: true });
+    localPath = p;
+  }
+
+  let videoError = null;
+  if (full.videoUrl) {
+    try {
+      const { res } = await getBinary(http, full.videoUrl);
+      const b64 = typeof res.data === 'string' ? res.data : abToB64(res.data);
+      const p = `${dir}/${base}.mp4`;
+      await fs.writeFile({ path: p, data: b64, directory: 'DATA', recursive: true });
+      localVideoPath = p;
+    } catch (e) {
+      videoError = String(e.message || e);
+    }
+  }
 
   const stored = {
     seriesId: full.seriesId,
@@ -245,15 +288,21 @@ async function downloadAudio(ep) {
     title: full.title,
     date: full.date,
     url: full.url,
-    audioUrl: full.audioUrl,
+    audioUrl: full.audioUrl || null,
+    videoUrl: full.videoUrl || null,
     transcript: full.transcript || [],
-    localPath: path,
+    localPath,
+    localVideoPath,
+    videoError,
     level: full.level,
     at: Date.now(),
   };
   addToLibrary(stored);
   return { ok: true, ep: stored };
 }
+
+// 兼容旧调用名
+const downloadAudio = downloadEpisode;
 
 /* ---------------- 已下载索引（localStorage） ---------------- */
 const KEY_LIB = 'ble.library';
@@ -278,9 +327,11 @@ async function removeFromLibrary(seriesId, epId) {
   saveLibrary(lib);
   const fs = getFS();
   if (fs) {
-    try {
-      await fs.deleteFile({ path: `downloads/${safeName(seriesId)}/${safeName(epId)}.mp3`, directory: 'DATA' });
-    } catch { /* 文件可能不存在 */ }
+    for (const ext of ['mp3', 'mp4']) {
+      try {
+        await fs.deleteFile({ path: `downloads/${safeName(seriesId)}/${safeName(epId)}.${ext}`, directory: 'DATA' });
+      } catch { /* 文件可能不存在 */ }
+    }
   }
 }
 async function localSrc(localPath) {
@@ -293,6 +344,7 @@ async function localSrc(localPath) {
 /* ---------------- 导出 ---------------- */
 const API = {
   isNative,
+  secureUrl,
   ENTRY_URLS,
   diag,
   getCatalog,
@@ -301,6 +353,7 @@ const API = {
   fetchEpisode,
   fetchAudioBlob,
   downloadAudio,
+  downloadEpisode,
   getLibrary,
   getStored,
   removeFromLibrary,

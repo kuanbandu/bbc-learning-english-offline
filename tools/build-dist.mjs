@@ -27,7 +27,7 @@ writeIcons(DIST);
 // 把解析模块（纯 JS，无 Node 依赖）复制到 dist/lib，供打包时解析相对路径
 const LIB = path.join(ROOT, 'src', 'lib');
 fs.mkdirSync(path.join(DIST, 'lib'), { recursive: true });
-for (const f of ['html.mjs', 'audio.mjs', 'parse.mjs']) {
+for (const f of ['html.mjs', 'audio.mjs', 'video.mjs', 'parse.mjs']) {
   const src = path.join(LIB, f);
   if (fs.existsSync(src)) fs.copyFileSync(src, path.join(DIST, 'lib', f));
 }

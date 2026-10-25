@@ -1,5 +1,6 @@
 import { absUrl, anchors, attr, decodeEntities, extractMainHtml, metaContent, slugify, stripTags, textToSentences } from './html.mjs';
 import { audioFromRssItem, resolveAudio } from './audio.mjs';
+import { resolveVideo } from './video.mjs';
 
 const LE_RE = /bbc\.co\.uk\/learningenglish\//i;
 
@@ -254,6 +255,9 @@ export async function parseEpisodePage(http, rawHtml, base) {
     '';
 
   const audio = await resolveAudio(http, html, base);
+  // 视频拿不到不算错：很多系列本来就只有音频
+  let video = null;
+  try { video = await resolveVideo(http, html, base); } catch { video = null; }
 
   const pdfAnchor = anchors(html, base).find(
     (a) => /\.(pdf|txt|docx?)(\?|#|$)/i.test(a.href) || /transcript|文稿|worksheet|练习/i.test(a.text)
@@ -265,6 +269,8 @@ export async function parseEpisodePage(http, rawHtml, base) {
     date,
     audioUrl: audio?.url || null,
     audioHow: audio?.how || null,
+    videoUrl: video?.url || null,
+    videoHow: video?.how || null,
     transcript: extractTranscript(html),
     transcriptFile: pdfAnchor?.href || null,
   };

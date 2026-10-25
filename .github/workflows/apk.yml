@@ -48,6 +48,16 @@ jobs:
       - name: 添加 Android 工程
         run: npx cap add android
 
+      # BBC 部分老资源仍是 http:// 直链，安卓 9+ 默认拦明文 HTTP，
+      # 会出现 "Cleartext HTTP traffic to downloads.bbc.co.uk not permitted"。
+      - name: 允许明文 HTTP
+        run: |
+          MAN=android/app/src/main/AndroidManifest.xml
+          if ! grep -q 'usesCleartextTraffic' "$MAN"; then
+            sed -i 's|<application|<application android:usesCleartextTraffic="true"|' "$MAN"
+          fi
+          grep -n 'usesCleartextTraffic' "$MAN"
+
       # kotlin-stdlib(1.8.x) 与旧的 kotlin-stdlib-jdk7/jdk8(1.6.x) 类重复，
       # 会导致 :app:checkDebugDuplicateClasses 失败。官方建议排除旧模块。
       - name: 修复 Kotlin 依赖冲突

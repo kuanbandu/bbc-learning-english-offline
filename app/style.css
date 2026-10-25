@@ -116,6 +116,9 @@ input[type=range]{width:100%;accent-color:var(--brand);height:28px}
 
 a{color:var(--brand)}
 
+/* 播放器：视频 */
+.player-video{width:100%;max-height:46vh;background:#000;border-radius:12px;margin:.2rem 0 .7rem;display:block}
+
 /* 下载页 */
 .level-tabs{display:flex;flex-wrap:wrap;gap:.4rem;margin-bottom:.8rem}
 .chip.on{background:var(--brand);color:#fff}
