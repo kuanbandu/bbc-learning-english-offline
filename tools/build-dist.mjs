@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import esbuild from 'esbuild';
 import { writeIcons } from './make-icons.mjs';
 
 const ROOT = process.cwd();
@@ -23,13 +24,30 @@ function copyDir(src, dest) {
 copyDir(APP, DIST);
 writeIcons(DIST);
 
-// 把解析模块（纯 JS，无 Node 依赖）复制到 dist/lib，供 app/net.js 复用
+// 把解析模块（纯 JS，无 Node 依赖）复制到 dist/lib，供打包时解析相对路径
 const LIB = path.join(ROOT, 'src', 'lib');
 fs.mkdirSync(path.join(DIST, 'lib'), { recursive: true });
 for (const f of ['html.mjs', 'audio.mjs', 'parse.mjs']) {
   const src = path.join(LIB, f);
   if (fs.existsSync(src)) fs.copyFileSync(src, path.join(DIST, 'lib', f));
 }
+
+// 关键：把 net.js（ES module）连同解析模块打成【普通 IIFE 脚本】。
+// 原因：Capacitor 的 Android WebView 加载 <script type="module"> 不稳定，
+// 曾导致 window.BBCNet 一直不存在、下载页始终提示“需要 App”。
+// 打成普通脚本后，它在 app.js 之前同步执行，window.BBCNet 必定就绪。
+await esbuild.build({
+  entryPoints: [path.join(DIST, 'net.js')],
+  bundle: true,
+  format: 'iife',
+  target: 'es2020',
+  minify: true,
+  outfile: path.join(DIST, 'net.bundle.js'),
+  logLevel: 'silent',
+});
+// 打包后已内联全部依赖，删除仅用于打包的中间文件，避免 App 再去加载它们
+fs.rmSync(path.join(DIST, 'net.js'), { force: true });
+fs.rmSync(path.join(DIST, 'lib'), { recursive: true, force: true });
 
 if (fs.existsSync(path.join(CONTENT, 'index.json'))) {
   copyDir(CONTENT, path.join(DIST, 'content'));

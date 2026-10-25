@@ -120,4 +120,5 @@ a{color:var(--brand)}
 .level-tabs{display:flex;flex-wrap:wrap;gap:.4rem;margin-bottom:.8rem}
 .chip.on{background:var(--brand);color:#fff}
 .dl-btn{min-width:72px}
+.dl-actions{display:flex;gap:.35rem;flex-shrink:0}
 #dl-body .row .ep{cursor:pointer}

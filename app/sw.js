@@ -1,8 +1,8 @@
-const SHELL_CACHE = 'ble-shell-v1';
+const SHELL_CACHE = 'ble-shell-v2';
 const CONTENT_CACHE = 'ble-content-v1';
 
 const SHELL = [
-  './', './index.html', './style.css', './app.js',
+  './', './index.html', './style.css', './app.js', './net.bundle.js',
   './manifest.webmanifest', './icon.svg', './icon-192.png', './icon-512.png',
 ];
 

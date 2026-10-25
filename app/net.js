@@ -10,15 +10,36 @@
 
 import { parseCoursePage, parseSeriesPage, parseEpisodePage } from './lib/parse.mjs';
 
-const Cap = window.Capacitor;
-const NATIVE = !!(Cap && Cap.isNativePlatform && Cap.isNativePlatform());
+// 运行环境检测放到“调用时”求值，而不是模块加载时：
+// Capacitor 的原生桥是页面加载过程中注入的，模块顶层取值可能过早。
+function isNative() {
+  const c = window.Capacitor;
+  if (!c) return false;
+  try {
+    if (typeof c.isNativePlatform === 'function' && c.isNativePlatform()) return true;
+    if (typeof c.getPlatform === 'function' && c.getPlatform() !== 'web') return true;
+  } catch { /* ignore */ }
+  // 最后兜底：Android 原生桥注入的全局对象
+  return typeof window.androidBridge !== 'undefined';
+}
+
+let _http = null;
+let _fs = null;
 // 不依赖插件的 JS 包，用 registerPlugin 直接走原生桥（标准插件都支持）
-const Http = NATIVE
-  ? (Cap.Plugins?.HttpBridge || Cap.registerPlugin('HttpBridge'))
-  : null;
-const FS = NATIVE
-  ? (Cap.Plugins?.Filesystem || Cap.registerPlugin('Filesystem'))
-  : null;
+function getHttp() {
+  if (_http) return _http;
+  const c = window.Capacitor;
+  if (!c) return null;
+  _http = c.Plugins?.HttpBridge || c.registerPlugin('HttpBridge');
+  return _http;
+}
+function getFS() {
+  if (_fs) return _fs;
+  const c = window.Capacitor;
+  if (!c) return null;
+  _fs = c.Plugins?.Filesystem || c.registerPlugin('Filesystem');
+  return _fs;
+}
 
 const UA =
   'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36';
@@ -40,8 +61,10 @@ const safeName = (s) => String(s || 'x').replace(/[^a-zA-Z0-9_-]+/g, '_').slice(
 
 /* ---------------- HTTP 适配层：给解析器用的 getText ---------------- */
 async function getText(url) {
-  if (Http) {
-    const r = await Http.get({ url, headers: HEADERS });
+  const http = getHttp();
+  if (http) {
+    const r = await http.get({ url, headers: HEADERS });
+    if (r.status && r.status >= 400) throw new Error('HTTP ' + r.status);
     return typeof r.data === 'string' ? r.data : '';
   }
   // 浏览器兜底（抓 BBC 会被 CORS 拦，仅用于本地调试）
@@ -134,18 +157,44 @@ function abToB64(buf) {
   return btoa(bin);
 }
 
+function b64ToBytes(b64) {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+// 在线播放用：把远程音频拉成 Blob（App 内走原生请求，绕过 CORS）
+async function fetchAudioBlob(url) {
+  const http = getHttp();
+  if (!http) throw new Error('当前环境不支持原生网络请求（请用安卓 App 打开）');
+  const r = await http.get({
+    url,
+    headers: { 'User-Agent': UA, Accept: '*/*' },
+    responseType: 'arraybuffer',
+  });
+  if (r.status && r.status >= 400) throw new Error('HTTP ' + r.status);
+  const b64 = typeof r.data === 'string' ? r.data : abToB64(r.data);
+  return new Blob([b64ToBytes(b64)], { type: 'audio/mpeg' });
+}
+
 // 返回 { ok, ep } 或抛错
 async function downloadAudio(ep) {
+  const http = getHttp();
+  const fs = getFS();
+  if (!http) throw new Error('当前环境不支持原生网络请求（请用安卓 App 打开）');
+  if (!fs) throw new Error('当前环境不支持本地存储');
   const full = await fetchEpisode(ep);
   if (!full.audioUrl) throw new Error('本集没有可下载的音频地址');
-  const res = await Http.get({
+  const res = await http.get({
     url: full.audioUrl,
     headers: { 'User-Agent': UA, Accept: '*/*' },
     responseType: 'arraybuffer',
   });
+  if (res.status && res.status >= 400) throw new Error('音频下载失败 HTTP ' + res.status);
   const b64 = typeof res.data === 'string' ? res.data : abToB64(res.data);
   const path = `downloads/${safeName(full.seriesId)}/${safeName(full.id)}.mp3`;
-  await FS.writeFile({ path, data: b64, directory: 'DATA', recursive: true });
+  await fs.writeFile({ path, data: b64, directory: 'DATA', recursive: true });
 
   const stored = {
     seriesId: full.seriesId,
@@ -185,26 +234,29 @@ async function removeFromLibrary(seriesId, epId) {
   const lib = getLibrary();
   delete lib.episodes[libKey(seriesId, epId)];
   saveLibrary(lib);
-  if (FS) {
+  const fs = getFS();
+  if (fs) {
     try {
-      await FS.deleteFile({ path: `downloads/${safeName(seriesId)}/${safeName(epId)}.mp3`, directory: 'DATA' });
+      await fs.deleteFile({ path: `downloads/${safeName(seriesId)}/${safeName(epId)}.mp3`, directory: 'DATA' });
     } catch { /* 文件可能不存在 */ }
   }
 }
 async function localSrc(localPath) {
-  if (!FS) return null;
-  const { uri } = await FS.getUri({ path: localPath, directory: 'DATA' });
-  return Cap.convertFileSrc(uri);
+  const fs = getFS();
+  if (!fs) return null;
+  const { uri } = await fs.getUri({ path: localPath, directory: 'DATA' });
+  return window.Capacitor.convertFileSrc(uri);
 }
 
 /* ---------------- 导出 ---------------- */
 const API = {
-  NATIVE,
+  isNative,
   ENTRY_URLS,
   getCatalog,
   fetchCatalog,
   fetchSeries,
   fetchEpisode,
+  fetchAudioBlob,
   downloadAudio,
   getLibrary,
   getStored,

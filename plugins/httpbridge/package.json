@@ -4,10 +4,8 @@
   "description": "极简原生 HTTP 桥接（GET），用于 App 内绕过 WebView 的 CORS 限制抓取 BBC",
   "main": "index.js",
   "capacitor": {
-    "plugins": {
-      "android": {
-        "src": "android"
-      }
+    "android": {
+      "src": "android"
     }
   }
 }

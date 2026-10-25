@@ -72,7 +72,7 @@ async function boot() {
   renderHome();
 }
 
-// 等 net.js（模块）注入 window.BBCNet；最多等 3 秒，避免模块加载失败时卡死启动
+// 等下载模块注入 window.BBCNet；它是普通脚本，通常已就绪，这里最多等 3 秒兜底
 function whenNet() {
   if (window.BBCNet) return Promise.resolve();
   return Promise.race([
@@ -223,18 +223,26 @@ async function openEpisode(i) {
   }
 }
 
+// 浏览器兜底：直接 fetch（App 内不会走到这里，浏览器里 BBC 也可能被 CORS 拦）
+async function fetchAudioBlobWeb(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return await res.blob();
+}
+
 async function loadAudio(e) {
+  const net = window.BBCNet;
+  const native = !!(net && net.isNative && net.isNative());
   let src = null;
   // 已下载到手机本地的音频：用原生文件地址直接播放（离线可用）
-  if (e.localPath && window.Capacitor?.isNativePlatform?.() && window.BBCNet) {
-    try { src = await window.BBCNet.localSrc(e.localPath); } catch (err) { console.warn('本地音频解析失败', err); }
+  if (e.localPath && native) {
+    try { src = await net.localSrc(e.localPath); } catch (err) { console.warn('本地音频解析失败', err); }
   }
   if (!src) {
     const url = epAudioUrl(e);
     if (!url) throw new Error('本集没有音频地址');
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const blob = await res.blob();
+    // App 内必须走原生请求：WebView 的 fetch 抓 BBC 会被 CORS 拦掉
+    const blob = native ? await net.fetchAudioBlob(url) : await fetchAudioBlobWeb(url);
     if (audioObjUrl) URL.revokeObjectURL(audioObjUrl);
     audioObjUrl = URL.createObjectURL(blob);
     src = audioObjUrl;
@@ -500,10 +508,26 @@ let dlState = { level: null, series: null };
 function renderDownload() {
   const body = $('#dl-body');
   const levels = $('#dl-levels');
-  if (!window.BBCNet || !window.BBCNet.NATIVE) {
+  // 1) 下载模块没加载出来（安装包里文件缺失、或被系统拦截）
+  if (!window.BBCNet) {
     levels.innerHTML = '';
     body.innerHTML =
-      '<div class="banner">下载功能需要在安卓 App（APK）里使用。你现在是浏览器打开，可浏览目录但不能下载音频。</div>';
+      '<div class="banner">下载模块没有加载成功。请确认装的是最新版 APK；如果刚覆盖安装过，先把旧版卸载再重装。</div>' +
+      '<div class="tool-row"><button class="chip" id="dl-retry">重新检查</button></div>';
+    const r1 = $('#dl-retry');
+    if (r1) r1.onclick = () => renderDownload();
+    return;
+  }
+  // 2) 模块在，但不是原生 App（浏览器/PWA）
+  if (!window.BBCNet.isNative()) {
+    levels.innerHTML = '';
+    const plat = window.Capacitor?.getPlatform?.() || '无';
+    body.innerHTML =
+      '<div class="banner">下载要在安卓 App（APK）里用。你现在是用浏览器打开，只能浏览、不能下载音频。</div>' +
+      `<div class="muted small">诊断：Capacitor=${!!window.Capacitor} · 平台=${escapeHtml(String(plat))} · 下载模块=是</div>` +
+      '<div class="tool-row"><button class="chip" id="dl-retry">重新检查</button></div>';
+    const r2 = $('#dl-retry');
+    if (r2) r2.onclick = () => renderDownload();
     return;
   }
   const cat = window.BBCNet.getCatalog();
@@ -545,25 +569,40 @@ async function openDlSeries(seriesId) {
 function renderDlEpisodes() {
   const s = dlState.series;
   const body = $('#dl-body');
+  const done = s.episodes.filter((e) => window.BBCNet.getStored(s.id, e.id)).length;
   body.innerHTML =
-    `<div class="series-head"><h1>${escapeHtml(s.title)}</h1><p class="muted">${s.episodes.length} 集</p></div>` +
+    `<div class="series-head"><h1>${escapeHtml(s.title)}</h1><p class="muted">共 ${s.episodes.length} 集 · 已下载 ${done} 集</p></div>` +
     '<div class="tool-row"><button class="chip" id="dl-all">下载全部</button><button class="chip" id="dl-back">返回栏目</button></div>' +
     '<div class="list">' +
     s.episodes
       .map((e, i) => {
         const st = window.BBCNet.getStored(s.id, e.id);
-        return `<div class="row" data-i="${i}"><div class="ep"><div class="body"><div class="t">${escapeHtml(e.title || e.id)}</div><div class="m">${escapeHtml(e.date || '')}</div></div></div><button class="chip dl-btn" data-i="${i}">${st ? '已下载' : '下载'}</button></div>`;
+        const actions = st
+          ? `<button class="chip dl-play" data-i="${i}">播放</button><button class="chip ghost dl-del" data-i="${i}">删除</button>`
+          : `<button class="chip dl-btn" data-i="${i}">下载</button>`;
+        return `<div class="row" data-i="${i}"><div class="ep"><div class="body"><div class="t">${escapeHtml(e.title || e.id)}</div><div class="m">${escapeHtml(e.date || '')}</div></div></div><div class="dl-actions">${actions}</div></div>`;
       })
       .join('') +
     '</div><div id="dl-progress" class="muted small"></div>';
 
   $('#dl-all').onclick = () => downloadAll(s);
   $('#dl-back').onclick = () => renderDownload();
-  $$('#dl-body .row').forEach((r) => {
-    const i = Number(r.dataset.i);
-    const btn = r.querySelector('.dl-btn');
-    btn.onclick = (ev) => { ev.stopPropagation(); downloadOne(s, i); };
-    r.querySelector('.ep').onclick = () => { const st = window.BBCNet.getStored(s.id, s.episodes[i].id); if (st) openLocalEpisode(st); };
+  $$('#dl-body .dl-btn').forEach((b) => {
+    const i = Number(b.dataset.i);
+    b.onclick = (ev) => { ev.stopPropagation(); downloadOne(s, i); };
+  });
+  $$('#dl-body .dl-play').forEach((b) => {
+    const i = Number(b.dataset.i);
+    b.onclick = (ev) => { ev.stopPropagation(); openLocalEpisode(window.BBCNet.getStored(s.id, s.episodes[i].id)); };
+  });
+  $$('#dl-body .dl-del').forEach((b) => {
+    const i = Number(b.dataset.i);
+    b.onclick = async (ev) => {
+      ev.stopPropagation();
+      if (!confirm('删除这一集的离线音频？')) return;
+      await window.BBCNet.removeFromLibrary(s.id, s.episodes[i].id);
+      renderDlEpisodes();
+    };
   });
 }
 
@@ -575,10 +614,11 @@ async function downloadOne(s, i) {
   try {
     const r = await window.BBCNet.downloadAudio(e);
     addLocalEpisode(r.ep);
-    if (btn) { btn.textContent = '已下载'; btn.classList.add('on'); }
-    if (prog) prog.textContent = `已下载：${r.ep.title}`;
+    renderDlEpisodes();
+    const p2 = $('#dl-progress');
+    if (p2) p2.textContent = `已下载：${r.ep.title}`;
   } catch (err) {
-    if (btn) btn.textContent = '失败';
+    if (btn) { btn.disabled = false; btn.textContent = '重试'; }
     if (prog) prog.textContent = `下载失败：${err.message || err}`;
   }
 }
