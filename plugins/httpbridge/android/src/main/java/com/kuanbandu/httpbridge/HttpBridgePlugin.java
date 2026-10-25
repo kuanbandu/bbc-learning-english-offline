@@ -182,10 +182,6 @@ public class HttpBridgePlugin extends Plugin {
         }).start();
     }
 
-    private static byte[] readAll(InputStream in) throws IOException {
-        return readAll(in, null, -1);
-    }
-
     /**
      * 读完整流。progressId 非空时，每 ~150ms 回调一次 downloadProgress，避免刷屏。
      * total 为 -1 表示服务器没给 Content-Length（分块传输）。
